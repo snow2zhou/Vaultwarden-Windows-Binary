@@ -79,7 +79,7 @@ jobs:
         run: |
           vcpkg integrate install
           vcpkg install openssl:x64-windows-static
-          vcpkg install mysql-connector-c:x64-windows-static-md
+          vcpkg install libmariadb:x64-windows-static-md
           vcpkg install libpq:x64-windows-static-md
         env:
           VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
