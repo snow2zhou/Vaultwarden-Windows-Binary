@@ -118,13 +118,13 @@ jobs:
           $vcpkgPath = "C:\vcpkg" # Default path on many GitHub runners
           if (Test-Path $vcpkgPath) {
             echo "Using pre-installed VCPKG from $vcpkgPath"
-            echo "::set-env name=VCPKG_ROOT::$vcpkgPath"
+            echo "VCPKG_ROOT=$vcpkgPath" >> "$env:GITHUB_ENV"
             vcpkg integrate install
           } else {
             Write-Error "VCPKG not found at default location C:\vcpkg. Please adjust path or ensure vcpkg setup."
             exit 1
           }
-          echo "::add-path::$vcpkgPath\\scripts\\buildsystems\\vcpkg"
+          echo "$vcpkgPath\scripts\buildsystems\vcpkg" >> "$env:GITHUB_PATH"
           if (Test-Path ".github/matchers/vcpkg.json") {
             echo "::add-matcher::.github/matchers/vcpkg.json"
           }
