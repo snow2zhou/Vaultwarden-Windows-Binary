@@ -79,16 +79,18 @@ jobs:
         run: |
           vcpkg integrate install
           vcpkg install openssl:x64-windows-static
+          vcpkg install libmariadb:x64-windows-static-md
           vcpkg install libpq:x64-windows-static-md
         env:
           VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
 
       - name: 编译 vaultwarden
-        run: cargo build --features "sqlite,postgresql" --release
+        run: cargo build --features "sqlite,mysql,postgresql" --release
         working-directory: vaultwarden
         env:
           RUSTFLAGS: "-Ctarget-feature=+crt-static"
-          POSTGRESQL_LIB_DIR: "${{ github.workspace }}/vcpkg/installed/x64-windows-static/lib"
+          MYSQL_LIB_DIR: "${{ github.workspace }}/vcpkg/installed/x64-windows-static-md/lib"
+          POSTGRESQL_LIB_DIR: "${{ github.workspace }}/vcpkg/installed/x64-windows-static-md/lib"
 
       - name: 移动文件
         run: move .\vaultwarden\target\release\vaultwarden.exe .\vaultwarden.exe
