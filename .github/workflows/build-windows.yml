@@ -19,75 +19,197 @@ on:
 jobs:
   build:
     runs-on: windows-latest
+    # VCPKG_ROOT is already set by the system when vcpkg is pre-installed
+    # We'll ensure it's used correctly and not re-cloned.
     env:
       VCPKG_DEFAULT_TRIPLET: x64-windows-static
-      VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+      # The action automatically sets VCPKG_ROOT to the correct location for pre-installed vcpkg
 
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4 # Use a specific version for better stability
+
       - name: 检查工具版本
-        run: git version && cargo version && vcpkg version
+        run: |
+          echo "Git version: $(git --version)"
+          echo "Cargo version: $(cargo --version)"
+          echo "Vcpkg version: $(vcpkg --version)"
+          echo "Rust toolchain: $(rustup show | Select-String '^\w' | Select-Object -First 1)"
 
       - name: vaultwarden 版本选择
         id: get_tag
         run: |
+          # --- Added API Authentication ---
+          $headers = @{
+            "Authorization" = "token ${{ secrets.GITHUB_TOKEN }}"
+          }
+          # --- End Added API Authentication ---
+
           if ("${{ github.event.inputs.tag_choice }}" -eq "release") {
-            $release = Invoke-RestMethod -Uri "https://api.github.com/repos/dani-garcia/vaultwarden/releases/latest"
+            # --- Using authenticated REST call ---
+            $release = Invoke-RestMethod -Uri "https://api.github.com/repos/dani-garcia/vaultwarden/releases/latest" -Headers $headers
+            # --- End Using authenticated REST call ---
             echo "Using release tag: $($release.tag_name)"
             echo "tag=$($release.tag_name)" >> $env:GITHUB_OUTPUT
           } elseif ("${{ github.event.inputs.tag_choice }}" -eq "latest") {
             echo "Using latest commit"
             echo "tag=" >> $env:GITHUB_OUTPUT
           } elseif ("${{ github.event.inputs.tag_choice }}" -eq "custom") {
+            if ("${{ github.event.inputs.tag }}" -eq "") {
+              Write-Error "Custom tag is required when tag_choice is 'custom'."
+              exit 1
+            }
             echo "Using custom tag: ${{ github.event.inputs.tag }}"
             echo "tag=${{ github.event.inputs.tag }}" >> $env:GITHUB_OUTPUT
           }
 
-      - name: 克隆 vaultwarden 仓库
-        run: git clone https://github.com/dani-garcia/vaultwarden
-
       - name: 切换版本
-        if: ${{ steps.get_tag.outputs.tag != '' }}
+        if: steps.get_tag.outputs.tag != ''
         run: git switch --detach "${{ steps.get_tag.outputs.tag }}"
         working-directory: vaultwarden
 
       - name: 下载 web-vault
         run: |
-          $Release = Invoke-RestMethod -Uri "https://api.github.com/repos/dani-garcia/bw_web_builds/releases/latest"
-          $Asset = $Release.assets | Where-Object { $_.name -like "*.tar.gz" }
-          Invoke-WebRequest -Uri $Asset.browser_download_url -OutFile web-vault.tar.gz
-          tar -xf web-vault.tar.gz
+          # --- Added API Authentication ---
+          $headers = @{
+            "Authorization" = "token ${{ secrets.GITHUB_TOKEN }}"
+          }
+          $Release = Invoke-RestMethod -Uri "https://api.github.com/repos/dani-garcia/bw_web_builds/releases/latest" -Headers $headers
+          # --- End Added API Authentication ---
 
-      - name: 初始化vcpkg
+          $Asset = $Release.assets | Where-Object { $_.name -like "*.tar.gz" }
+          if (-not $Asset) {
+            Write-Error "No .tar.gz asset found for web-vault."
+            exit 1
+          }
+
+          # --- Corrected web-vault extraction ---
+          $ExtractDir = "web-vault"
+          if (Test-Path $ExtractDir) { Remove-Item -Recurse -Force $ExtractDir }
+          New-Item -ItemType Directory -Force $ExtractDir | Out-Null
+          Invoke-WebRequest -Uri $Asset.browser_download_url -OutFile "web-vault.tar.gz"
+          # Use -C to specify output directory and --strip-components=1 if archive has a top-level folder
+          tar -xf "web-vault.tar.gz" -C $ExtractDir --strip-components=1
+          Remove-Item "web-vault.tar.gz"
+          # --- End Corrected web-vault extraction ---
+
+      - name: 初始化vcpkg (Skip cloning if vcpkg is pre-installed)
         run: |
-          git clone https://github.com/Microsoft/vcpkg
-          .\vcpkg\bootstrap-vcpkg.bat
-          .\vcpkg\vcpkg integrate install
+          # The windows-latest runner usually has vcpkg pre-installed.
+          # We just need to ensure it's integrated and the VCPKG_ROOT is accessible.
+          # The VCPKG_ROOT env var is already set by the runner in some cases.
+          # If not, we can explicitly set it.
+          # VCPKG_ROOT is usually located at C:\vcpkg on the runner.
+          # Let's explicitly use the runner's VCPKG_ROOT path.
+          $vcpkgPath = "C:\vcpkg" # Default path on many GitHub runners
+          if (Test-Path $vcpkgPath) {
+            echo "Using pre-installed VCPKG from $vcpkgPath"
+            echo "::set-env name=VCPKG_ROOT::$vcpkgPath"
+            vcpkg integrate install
+          } else {
+            Write-Error "VCPKG not found at default location C:\vcpkg. Please adjust path or ensure vcpkg setup."
+            exit 1
+          }
+          # Add vcpkg scripts to path for easier command execution
+          echo "::add-path::$vcpkgPath\\scripts\\buildsystems\\vcpkg"
+          # Add the matcher if you created the file
+          if (Test-Path ".github/matchers/vcpkg.json") {
+            echo "::add-matcher::.github/matchers/vcpkg.json"
+          }
 
       - name: 安装数据库依赖
         run: |
+          # openssl is a common dependency for mysql and postgresql crates
           .\vcpkg\vcpkg install openssl:x64-windows-static
-          .\vcpkg\vcpkg install libpq:x64-windows-static    # PostgreSQL
-          .\vcpkg\vcpkg install libmysql:x64-windows-static # MySQL
-          .\vcpkg\vcpkg install sqlite3:x64-windows-static  # SQLite
+
+          # Install PostgreSQL
+          if ("${{ github.event.inputs.db_choice }}" -eq "all" -or "${{ github.event.inputs.db_choice }}" -eq "postgresql") {
+            .\vcpkg\vcpkg install libpq:x64-windows-static
+          }
+
+          # Install MySQL
+          if ("${{ github.event.inputs.db_choice }}" -eq "all" -or "${{ github.event.inputs.db_choice }}" -eq "mysql") {
+            .\vcpkg\vcpkg install mysql:x64-windows-static
+          }
+          # SQLite is usually bundled by the Rust crate itself.
+          # If Vaultwarden specifically requires it from vcpkg for some reason, add:
+          # if ("${{ github.event.inputs.db_choice }}" -eq "all" -or "${{ github.event.inputs.db_choice }}" -eq "sqlite") {
+          #   .\vcpkg\vcpkg install sqlite3:x64-windows-static
+          # }
         env:
           VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
+          # Ensure VCPKG_ROOT is set for vcpkg commands
+          VCPKG_ROOT: "C:/vcpkg" # Explicitly set it here if not set by runner
+
+      - name: 确定 Cargo Features
+        id: get_features
+        run: |
+          $chosen_features = ""
+          if ("${{ github.event.inputs.db_choice }}" -eq "all") {
+            $chosen_features = "sqlite,mysql,postgresql"
+          } elseif ("${{ github.event.inputs.db_choice }}" -eq "sqlite") {
+            $chosen_features = "sqlite"
+          } elseif ("${{ github.event.inputs.db_choice }}" -eq "mysql") {
+            $chosen_features = "mysql"
+          } elseif ("${{ github.event.inputs.db_choice }}" -eq "postgresql") {
+            $chosen_features = "postgresql"
+          }
+          echo "Selected features: $chosen_features"
+          echo "features=$chosen_features" >> $env:GITHUB_OUTPUT
 
       - name: 编译Vaultwarden
-        run: cargo build --features "sqlite,mysql,postgresql" --release
         working-directory: vaultwarden
+        run: |
+          echo "Building Vaultwarden with features: ${{ steps.get_features.outputs.features }}"
+          cargo build --features "${{ steps.get_features.outputs.features }}" --release --verbose
         env:
           RUSTFLAGS: "-Ctarget-feature=+crt-static"
-          POSTGRESQL_LIB_DIR: "${{ github.workspace }}/vcpkg/installed/x64-windows-static/lib"
-          MYSQL_LIB_DIR: "${{ github.workspace }}/vcpkg/installed/x64-windows-static/lib"
-          MYSQLCLIENT_VERSION: "8.0"
-          SQLITE3_LIB_DIR: "${{ github.workspace }}/vcpkg/installed/x64-windows-static/lib"
-          LIB: "${{ github.workspace }}/vcpkg/installed/x64-windows-static/lib"
-          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+          # Use VCPKG_ROOT for build scripts to find libraries
+          VCPKG_ROOT: "C:/vcpkg"
+          # Explicitly set library paths for common Rust crates that might not auto-detect vcpkg well
+          # Adjust paths if 'libmysql.lib' is not directly in '...\lib', but in a subdir like '...\lib\mysql\'
+          # The build.rs for mysqlclient-sys might look for specific env vars or use pkg-config/mysql_config
+          # If `mysqlclient-sys` fails, consider setting MYSQLCLIENT_LIB_DIR and MYSQLCLIENT_VERSION
+          # Example:
+          # MYSQLCLIENT_LIB_DIR: "C:/vcpkg/installed/x64-windows-static/lib" # Check the exact path
+          # MYSQLCLIENT_VERSION: "8.0" # Or the actual version from vcpkg
+          # For PostgreSQL, libpq-sys often uses pkg-config or checks common paths.
+          # Adding LIB to path is a general approach that can sometimes help.
+          LIB: "C:/vcpkg/installed/x64-windows-static/lib" # Add lib dir to system LIB path
+
+      - name: 复制构建产物
+        run: |
+          $buildDir = Join-Path $GITHUB_WORKSPACE "vaultwarden\target\release"
+          if (-not (Test-Path $buildDir)) {
+              Write-Error "Build directory not found at $buildDir. Cargo build likely failed."
+              exit 1
+          }
+          copy (Join-Path $buildDir "vaultwarden.exe") $GITHUB_WORKSPACE
+          echo "Copied vaultwarden.exe to $GITHUB_WORKSPACE"
+
+      - name: 版本信息
+        id: get_version
+        run: |
+          $vaultwardenExePath = Join-Path $GITHUB_WORKSPACE "vaultwarden.exe"
+          if (-not (Test-Path $vaultwardenExePath)) {
+              Write-Error "Vaultwarden executable not found at $vaultwardenExePath after copy. Build likely failed."
+              exit 1
+          }
+
+          $version_output = & $vaultwardenExePath -v
+          $vaultwarden_version = ($version_output | Select-String -Pattern "Vaultwarden (\S+)").Matches.Groups[1].Value
+          $web_vault_version = ($version_output | Select-String -Pattern "Web-Vault (\S+)").Matches.Groups[1].Value
+
+          echo "Vaultwarden version: $vaultwarden_version"
+          echo "Web-Vault version: $web_vault_version"
+
+          echo "vaultwarden_version=$vaultwarden_version" >> $env:GITHUB_OUTPUT
+          echo "web_vault_version=$web_vault_version" >> $env:GITHUB_OUTPUT
 
       - name: 打包输出
         uses: actions/upload-artifact@v4
         with:
-          name: Vaultwarden_FullDB_${{ steps.get_version.outputs.vaultwarden_version }}
+          name: Vaultwarden_${{ github.event.inputs.db_choice }}_${{ steps.get_version.outputs.vaultwarden_version }}
           path: |
-            vaultwarden/target/release/vaultwarden.exe
+            vaultwarden.exe
             web-vault/
