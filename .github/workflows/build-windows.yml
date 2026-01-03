@@ -77,11 +77,12 @@ jobs:
         working-directory: vaultwarden
         env:
           RUSTFLAGS: "-Ctarget-feature=+crt-static"
-          OPENSSL_NO_VENDOR: 1
           POSTGRESQL_LIB_DIR: "${{ github.workspace }}/vcpkg/installed/x64-windows-static/lib"
           MYSQL_LIB_DIR: "${{ github.workspace }}/vcpkg/installed/x64-windows-static/lib"
+          MYSQLCLIENT_VERSION: "8.0"
           SQLITE3_LIB_DIR: "${{ github.workspace }}/vcpkg/installed/x64-windows-static/lib"
           LIB: "${{ github.workspace }}/vcpkg/installed/x64-windows-static/lib"
+          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
 
       - name: 打包输出
         uses: actions/upload-artifact@v4
