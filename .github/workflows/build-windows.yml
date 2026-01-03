@@ -15,19 +15,34 @@ on:
       tag:
         description: "自定义 commit"
         required: false
+      db_choice: # Added db_choice input for explicit control
+        description: "数据库支持选择"
+        required: true
+        default: "all"
+        type: choice
+        options:
+          - all
+          - sqlite
+          - mysql
+          - postgresql
 
 jobs:
   build:
     runs-on: windows-latest
-    # VCPKG_ROOT is already set by the system when vcpkg is pre-installed
-    # We'll ensure it's used correctly and not re-cloned.
     env:
       VCPKG_DEFAULT_TRIPLET: x64-windows-static
-      # The action automatically sets VCPKG_ROOT to the correct location for pre-installed vcpkg
+      # VCPKG_ROOT is already set by the system when vcpkg is pre-installed
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4 # Use a specific version for better stability
+      - name: Checkout code (Main Repo)
+        uses: actions/checkout@v4 # Checkout the main repository
+
+      - name: Checkout vaultwarden repository
+        uses: actions/checkout@v4
+        with:
+          repository: dani-garcia/vaultwarden # Specify the vaultwarden repository
+          path: vaultwarden # Checkout into a subdirectory named 'vaultwarden'
+          ref: ${{ steps.get_tag.outputs.tag }} # Use the determined tag
 
       - name: 检查工具版本
         run: |
@@ -63,10 +78,14 @@ jobs:
             echo "tag=${{ github.event.inputs.tag }}" >> $env:GITHUB_OUTPUT
           }
 
-      - name: 切换版本
-        if: steps.get_tag.outputs.tag != ''
-        run: git switch --detach "${{ steps.get_tag.outputs.tag }}"
-        working-directory: vaultwarden
+      # This step is now redundant as the tag is handled by the checkout action itself.
+      # If you need to switch *within* the already checked out vaultwarden dir (e.g., if you checked out the main repo and *then* wanted to switch),
+      # you would need to make sure that 'vaultwarden' directory exists.
+      # But with the separate checkout, the tag is set directly.
+      # - name: 切换版本
+      #   if: steps.get_tag.outputs.tag != ''
+      #   run: git switch --detach "${{ steps.get_tag.outputs.tag }}"
+      #   working-directory: vaultwarden # This line might cause issues if vaultwarden doesn't exist yet.
 
       - name: 下载 web-vault
         run: |
@@ -84,6 +103,7 @@ jobs:
           }
 
           # --- Corrected web-vault extraction ---
+          # The web-vault should be extracted relative to the root, not inside the vaultwarden dir.
           $ExtractDir = "web-vault"
           if (Test-Path $ExtractDir) { Remove-Item -Recurse -Force $ExtractDir }
           New-Item -ItemType Directory -Force $ExtractDir | Out-Null
@@ -95,12 +115,6 @@ jobs:
 
       - name: 初始化vcpkg (Skip cloning if vcpkg is pre-installed)
         run: |
-          # The windows-latest runner usually has vcpkg pre-installed.
-          # We just need to ensure it's integrated and the VCPKG_ROOT is accessible.
-          # The VCPKG_ROOT env var is already set by the runner in some cases.
-          # If not, we can explicitly set it.
-          # VCPKG_ROOT is usually located at C:\vcpkg on the runner.
-          # Let's explicitly use the runner's VCPKG_ROOT path.
           $vcpkgPath = "C:\vcpkg" # Default path on many GitHub runners
           if (Test-Path $vcpkgPath) {
             echo "Using pre-installed VCPKG from $vcpkgPath"
@@ -110,9 +124,7 @@ jobs:
             Write-Error "VCPKG not found at default location C:\vcpkg. Please adjust path or ensure vcpkg setup."
             exit 1
           }
-          # Add vcpkg scripts to path for easier command execution
           echo "::add-path::$vcpkgPath\\scripts\\buildsystems\\vcpkg"
-          # Add the matcher if you created the file
           if (Test-Path ".github/matchers/vcpkg.json") {
             echo "::add-matcher::.github/matchers/vcpkg.json"
           }
@@ -131,15 +143,9 @@ jobs:
           if ("${{ github.event.inputs.db_choice }}" -eq "all" -or "${{ github.event.inputs.db_choice }}" -eq "mysql") {
             .\vcpkg\vcpkg install mysql:x64-windows-static
           }
-          # SQLite is usually bundled by the Rust crate itself.
-          # If Vaultwarden specifically requires it from vcpkg for some reason, add:
-          # if ("${{ github.event.inputs.db_choice }}" -eq "all" -or "${{ github.event.inputs.db_choice }}" -eq "sqlite") {
-          #   .\vcpkg\vcpkg install sqlite3:x64-windows-static
-          # }
         env:
           VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
-          # Ensure VCPKG_ROOT is set for vcpkg commands
-          VCPKG_ROOT: "C:/vcpkg" # Explicitly set it here if not set by runner
+          VCPKG_ROOT: "C:/vcpkg"
 
       - name: 确定 Cargo Features
         id: get_features
@@ -158,27 +164,20 @@ jobs:
           echo "features=$chosen_features" >> $env:GITHUB_OUTPUT
 
       - name: 编译Vaultwarden
+        # IMPORTANT: Set working-directory to the vaultwarden subdirectory
         working-directory: vaultwarden
         run: |
           echo "Building Vaultwarden with features: ${{ steps.get_features.outputs.features }}"
+          # This command now correctly runs within the 'vaultwarden' subdirectory
           cargo build --features "${{ steps.get_features.outputs.features }}" --release --verbose
         env:
           RUSTFLAGS: "-Ctarget-feature=+crt-static"
-          # Use VCPKG_ROOT for build scripts to find libraries
           VCPKG_ROOT: "C:/vcpkg"
-          # Explicitly set library paths for common Rust crates that might not auto-detect vcpkg well
-          # Adjust paths if 'libmysql.lib' is not directly in '...\lib', but in a subdir like '...\lib\mysql\'
-          # The build.rs for mysqlclient-sys might look for specific env vars or use pkg-config/mysql_config
-          # If `mysqlclient-sys` fails, consider setting MYSQLCLIENT_LIB_DIR and MYSQLCLIENT_VERSION
-          # Example:
-          # MYSQLCLIENT_LIB_DIR: "C:/vcpkg/installed/x64-windows-static/lib" # Check the exact path
-          # MYSQLCLIENT_VERSION: "8.0" # Or the actual version from vcpkg
-          # For PostgreSQL, libpq-sys often uses pkg-config or checks common paths.
-          # Adding LIB to path is a general approach that can sometimes help.
-          LIB: "C:/vcpkg/installed/x64-windows-static/lib" # Add lib dir to system LIB path
+          LIB: "C:/vcpkg/installed/x64-windows-static/lib"
 
       - name: 复制构建产物
         run: |
+          # The vaultwarden.exe will be in the vaultwarden\target\release directory
           $buildDir = Join-Path $GITHUB_WORKSPACE "vaultwarden\target\release"
           if (-not (Test-Path $buildDir)) {
               Write-Error "Build directory not found at $buildDir. Cargo build likely failed."
