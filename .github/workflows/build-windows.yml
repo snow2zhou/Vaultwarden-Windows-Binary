@@ -1,4 +1,4 @@
-name: Vaultwarden Windows Build
+name: Vaultwarden Windows Build (Full DB Support)
 
 on:
   workflow_dispatch:
@@ -19,6 +19,9 @@ on:
 jobs:
   build:
     runs-on: windows-latest
+    env:
+      VCPKG_DEFAULT_TRIPLET: x64-windows-static
+      VCPKG_ROOT: ${{ github.workspace }}/vcpkg
 
     steps:
       - name: 检查工具版本
@@ -51,65 +54,39 @@ jobs:
         run: |
           $Release = Invoke-RestMethod -Uri "https://api.github.com/repos/dani-garcia/bw_web_builds/releases/latest"
           $Asset = $Release.assets | Where-Object { $_.name -like "*.tar.gz" }
+          Invoke-WebRequest -Uri $Asset.browser_download_url -OutFile web-vault.tar.gz
+          tar -xf web-vault.tar.gz
 
-          if (-not $Asset) {
-            Write-Error "No .tar.gz asset found."
-            exit 1
-          }
-
-          $DownloadUrl = $Asset.browser_download_url
-          $FileName = $Asset.name
-          $OutPath = "web-vault"
-
-          Write-Host "Downloading $FileName..."
-          Invoke-WebRequest -Uri $DownloadUrl -OutFile $FileName
-
-          Write-Host "Extracting..."
-          tar -xf $FileName
-
-      - name: 配置 vcpkg 缓存
-        uses: actions/github-script@v7
-        with:
-          script: |
-            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
-            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
-
-
-      - name: 使用vcpkg安装依赖
+      - name: 初始化vcpkg
         run: |
-          vcpkg integrate install
-          vcpkg install openssl:x64-windows-static
-          vcpkg install libpq:x64-windows-static-md
+          git clone https://github.com/Microsoft/vcpkg
+          .\vcpkg\bootstrap-vcpkg.bat
+          .\vcpkg\vcpkg integrate install
+
+      - name: 安装数据库依赖
+        run: |
+          .\vcpkg\vcpkg install openssl:x64-windows-static
+          .\vcpkg\vcpkg install libpq:x64-windows-static    # PostgreSQL
+          .\vcpkg\vcpkg install libmysql:x64-windows-static # MySQL
+          .\vcpkg\vcpkg install sqlite3:x64-windows-static  # SQLite
         env:
           VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
 
-      - name: 编译 vaultwarden
-        run: cargo build --features "sqlite,postgresql" --release
+      - name: 编译Vaultwarden
+        run: cargo build --features "sqlite,mysql,postgresql" --release
         working-directory: vaultwarden
         env:
           RUSTFLAGS: "-Ctarget-feature=+crt-static"
-          POSTGRESQL_LIB_DIR: "${{ github.workspace }}/vcpkg/installed/x64-windows-static-md/lib"
+          OPENSSL_NO_VENDOR: 1
+          POSTGRESQL_LIB_DIR: "${{ github.workspace }}/vcpkg/installed/x64-windows-static/lib"
+          MYSQL_LIB_DIR: "${{ github.workspace }}/vcpkg/installed/x64-windows-static/lib"
+          SQLITE3_LIB_DIR: "${{ github.workspace }}/vcpkg/installed/x64-windows-static/lib"
+          LIB: "${{ github.workspace }}/vcpkg/installed/x64-windows-static/lib"
 
-      - name: 移动文件
-        run: move .\vaultwarden\target\release\vaultwarden.exe .\vaultwarden.exe
-
-      - name: 版本信息
-        id: get_version
-        run: |
-          $version_output = .\vaultwarden.exe -v
-          $vaultwarden_version = ($version_output | Select-String -Pattern "Vaultwarden (\S+)").Matches.Groups[1].Value
-          $web_vault_version = ($version_output | Select-String -Pattern "Web-Vault (\S+)").Matches.Groups[1].Value
-
-          echo "Vaultwarden version: $vaultwarden_version"
-          echo "Web-Vault version: $web_vault_version"
-
-          echo "vaultwarden_version=$vaultwarden_version" >> $env:GITHUB_OUTPUT
-          echo "web_vault_version=$web_vault_version" >> $env:GITHUB_OUTPUT
-
-      - name: 打包文件
+      - name: 打包输出
         uses: actions/upload-artifact@v4
         with:
-          name: Vaultwarden_${{ steps.get_version.outputs.vaultwarden_version }}_${{ steps.get_version.outputs.web_vault_version }}
+          name: Vaultwarden_FullDB_${{ steps.get_version.outputs.vaultwarden_version }}
           path: |
-            vaultwarden.exe
-            web-vault
+            vaultwarden/target/release/vaultwarden.exe
+            web-vault/
