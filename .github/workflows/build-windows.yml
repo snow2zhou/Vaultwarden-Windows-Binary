@@ -1,4 +1,4 @@
-name: Vaultwarden Windows Build (Full DB Support)
+name: Vaultwarden Windows Build
 
 on:
   workflow_dispatch:
@@ -15,187 +15,88 @@ on:
       tag:
         description: "自定义 commit"
         required: false
-      db_choice: # Added db_choice input for explicit control
-        description: "数据库支持选择"
-        required: true
-        default: "all"
-        type: choice
-        options:
-          - all
-          - sqlite
-          - mysql
-          - postgresql
 
 jobs:
   build:
     runs-on: windows-latest
-    env:
-      VCPKG_DEFAULT_TRIPLET: x64-windows-static
-      # VCPKG_ROOT is already set by the system when vcpkg is pre-installed
 
     steps:
-      - name: Checkout code (Main Repo)
-        uses: actions/checkout@v4 # Checkout the main repository
-
-      - name: Checkout vaultwarden repository
-        uses: actions/checkout@v4
-        with:
-          repository: dani-garcia/vaultwarden # Specify the vaultwarden repository
-          path: vaultwarden # Checkout into a subdirectory named 'vaultwarden'
-          ref: ${{ steps.get_tag.outputs.tag }} # Use the determined tag
-
       - name: 检查工具版本
-        run: |
-          echo "Git version: $(git --version)"
-          echo "Cargo version: $(cargo --version)"
-          echo "Vcpkg version: $(vcpkg --version)"
-          echo "Rust toolchain: $(rustup show | Select-String '^\w' | Select-Object -First 1)"
+        run: git version && cargo version && vcpkg version
 
       - name: vaultwarden 版本选择
         id: get_tag
         run: |
-          # --- Added API Authentication ---
-          $headers = @{
-            "Authorization" = "token ${{ secrets.GITHUB_TOKEN }}"
-          }
-          # --- End Added API Authentication ---
-
           if ("${{ github.event.inputs.tag_choice }}" -eq "release") {
-            # --- Using authenticated REST call ---
-            $release = Invoke-RestMethod -Uri "https://api.github.com/repos/dani-garcia/vaultwarden/releases/latest" -Headers $headers
-            # --- End Using authenticated REST call ---
+            $release = Invoke-RestMethod -Uri "https://api.github.com/repos/dani-garcia/vaultwarden/releases/latest"
             echo "Using release tag: $($release.tag_name)"
             echo "tag=$($release.tag_name)" >> $env:GITHUB_OUTPUT
           } elseif ("${{ github.event.inputs.tag_choice }}" -eq "latest") {
             echo "Using latest commit"
             echo "tag=" >> $env:GITHUB_OUTPUT
           } elseif ("${{ github.event.inputs.tag_choice }}" -eq "custom") {
-            if ("${{ github.event.inputs.tag }}" -eq "") {
-              Write-Error "Custom tag is required when tag_choice is 'custom'."
-              exit 1
-            }
             echo "Using custom tag: ${{ github.event.inputs.tag }}"
             echo "tag=${{ github.event.inputs.tag }}" >> $env:GITHUB_OUTPUT
           }
 
-      # This step is now redundant as the tag is handled by the checkout action itself.
-      # If you need to switch *within* the already checked out vaultwarden dir (e.g., if you checked out the main repo and *then* wanted to switch),
-      # you would need to make sure that 'vaultwarden' directory exists.
-      # But with the separate checkout, the tag is set directly.
-      # - name: 切换版本
-      #   if: steps.get_tag.outputs.tag != ''
-      #   run: git switch --detach "${{ steps.get_tag.outputs.tag }}"
-      #   working-directory: vaultwarden # This line might cause issues if vaultwarden doesn't exist yet.
+      - name: 克隆 vaultwarden 仓库
+        run: git clone https://github.com/dani-garcia/vaultwarden
+
+      - name: 切换版本
+        if: ${{ steps.get_tag.outputs.tag != '' }}
+        run: git switch --detach "${{ steps.get_tag.outputs.tag }}"
+        working-directory: vaultwarden
 
       - name: 下载 web-vault
         run: |
-          # --- Added API Authentication ---
-          $headers = @{
-            "Authorization" = "token ${{ secrets.GITHUB_TOKEN }}"
-          }
-          $Release = Invoke-RestMethod -Uri "https://api.github.com/repos/dani-garcia/bw_web_builds/releases/latest" -Headers $headers
-          # --- End Added API Authentication ---
-
+          $Release = Invoke-RestMethod -Uri "https://api.github.com/repos/dani-garcia/bw_web_builds/releases/latest"
           $Asset = $Release.assets | Where-Object { $_.name -like "*.tar.gz" }
+
           if (-not $Asset) {
-            Write-Error "No .tar.gz asset found for web-vault."
+            Write-Error "No .tar.gz asset found."
             exit 1
           }
 
-          # --- Corrected web-vault extraction ---
-          # The web-vault should be extracted relative to the root, not inside the vaultwarden dir.
-          $ExtractDir = "web-vault"
-          if (Test-Path $ExtractDir) { Remove-Item -Recurse -Force $ExtractDir }
-          New-Item -ItemType Directory -Force $ExtractDir | Out-Null
-          Invoke-WebRequest -Uri $Asset.browser_download_url -OutFile "web-vault.tar.gz"
-          # Use -C to specify output directory and --strip-components=1 if archive has a top-level folder
-          tar -xf "web-vault.tar.gz" -C $ExtractDir --strip-components=1
-          Remove-Item "web-vault.tar.gz"
-          # --- End Corrected web-vault extraction ---
+          $DownloadUrl = $Asset.browser_download_url
+          $FileName = $Asset.name
+          $OutPath = "web-vault"
 
-      - name: 初始化vcpkg (Skip cloning if vcpkg is pre-installed)
+          Write-Host "Downloading $FileName..."
+          Invoke-WebRequest -Uri $DownloadUrl -OutFile $FileName
+
+          Write-Host "Extracting..."
+          tar -xf $FileName
+
+      - name: 配置 vcpkg 缓存
+        uses: actions/github-script@v7
+        with:
+          script: |
+            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+
+
+      - name: 使用vcpkg安装依赖
         run: |
-          $vcpkgPath = "C:\vcpkg" # Default path on many GitHub runners
-          if (Test-Path $vcpkgPath) {
-            echo "Using pre-installed VCPKG from $vcpkgPath"
-            echo "VCPKG_ROOT=$vcpkgPath" >> "$env:GITHUB_ENV"
-            vcpkg integrate install
-          } else {
-            Write-Error "VCPKG not found at default location C:\vcpkg. Please adjust path or ensure vcpkg setup."
-            exit 1
-          }
-          echo "$vcpkgPath\scripts\buildsystems\vcpkg" >> "$env:GITHUB_PATH"
-          if (Test-Path ".github/matchers/vcpkg.json") {
-            echo "::add-matcher::.github/matchers/vcpkg.json"
-          }
-
-      - name: 安装数据库依赖
-        run: |
-          # openssl is a common dependency for mysql and postgresql crates
-          .\vcpkg\vcpkg install openssl:x64-windows-static
-
-          # Install PostgreSQL
-          if ("${{ github.event.inputs.db_choice }}" -eq "all" -or "${{ github.event.inputs.db_choice }}" -eq "postgresql") {
-            .\vcpkg\vcpkg install libpq:x64-windows-static
-          }
-
-          # Install MySQL
-          if ("${{ github.event.inputs.db_choice }}" -eq "all" -or "${{ github.event.inputs.db_choice }}" -eq "mysql") {
-            .\vcpkg\vcpkg install mysql:x64-windows-static
-          }
+          vcpkg integrate install
+          vcpkg install openssl:x64-windows-static
+          vcpkg install libpq:x64-windows-static
         env:
           VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
-          VCPKG_ROOT: "C:/vcpkg"
 
-      - name: 确定 Cargo Features
-        id: get_features
-        run: |
-          $chosen_features = ""
-          if ("${{ github.event.inputs.db_choice }}" -eq "all") {
-            $chosen_features = "sqlite,mysql,postgresql"
-          } elseif ("${{ github.event.inputs.db_choice }}" -eq "sqlite") {
-            $chosen_features = "sqlite"
-          } elseif ("${{ github.event.inputs.db_choice }}" -eq "mysql") {
-            $chosen_features = "mysql"
-          } elseif ("${{ github.event.inputs.db_choice }}" -eq "postgresql") {
-            $chosen_features = "postgresql"
-          }
-          echo "Selected features: $chosen_features"
-          echo "features=$chosen_features" >> $env:GITHUB_OUTPUT
-
-      - name: 编译Vaultwarden
-        # IMPORTANT: Set working-directory to the vaultwarden subdirectory
+      - name: 编译 vaultwarden
+        run: cargo build --features "sqlite,postgresql" --release
         working-directory: vaultwarden
-        run: |
-          echo "Building Vaultwarden with features: ${{ steps.get_features.outputs.features }}"
-          # This command now correctly runs within the 'vaultwarden' subdirectory
-          cargo build --features "${{ steps.get_features.outputs.features }}" --release --verbose
         env:
           RUSTFLAGS: "-Ctarget-feature=+crt-static"
-          VCPKG_ROOT: "C:/vcpkg"
-          LIB: "C:/vcpkg/installed/x64-windows-static/lib"
+          POSTGRESQL_LIB_DIR: "${{ github.workspace }}/vcpkg/installed/x64-windows-static/lib"
 
-      - name: 复制构建产物
-        run: |
-          # The vaultwarden.exe will be in the vaultwarden\target\release directory
-          $buildDir = Join-Path $GITHUB_WORKSPACE "vaultwarden\target\release"
-          if (-not (Test-Path $buildDir)) {
-              Write-Error "Build directory not found at $buildDir. Cargo build likely failed."
-              exit 1
-          }
-          copy (Join-Path $buildDir "vaultwarden.exe") $GITHUB_WORKSPACE
-          echo "Copied vaultwarden.exe to $GITHUB_WORKSPACE"
+      - name: 移动文件
+        run: move .\vaultwarden\target\release\vaultwarden.exe .\vaultwarden.exe
 
       - name: 版本信息
         id: get_version
         run: |
-          $vaultwardenExePath = Join-Path $GITHUB_WORKSPACE "vaultwarden.exe"
-          if (-not (Test-Path $vaultwardenExePath)) {
-              Write-Error "Vaultwarden executable not found at $vaultwardenExePath after copy. Build likely failed."
-              exit 1
-          }
-
-          $version_output = & $vaultwardenExePath -v
+          $version_output = .\vaultwarden.exe -v
           $vaultwarden_version = ($version_output | Select-String -Pattern "Vaultwarden (\S+)").Matches.Groups[1].Value
           $web_vault_version = ($version_output | Select-String -Pattern "Web-Vault (\S+)").Matches.Groups[1].Value
 
@@ -205,10 +106,10 @@ jobs:
           echo "vaultwarden_version=$vaultwarden_version" >> $env:GITHUB_OUTPUT
           echo "web_vault_version=$web_vault_version" >> $env:GITHUB_OUTPUT
 
-      - name: 打包输出
+      - name: 打包文件
         uses: actions/upload-artifact@v4
         with:
-          name: Vaultwarden_${{ github.event.inputs.db_choice }}_${{ steps.get_version.outputs.vaultwarden_version }}
+          name: Vaultwarden_${{ steps.get_version.outputs.vaultwarden_version }}_${{ steps.get_version.outputs.web_vault_version }}
           path: |
             vaultwarden.exe
-            web-vault/
+            web-vault
