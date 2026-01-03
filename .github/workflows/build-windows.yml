@@ -79,16 +79,20 @@ jobs:
         run: |
           vcpkg integrate install
           vcpkg install openssl:x64-windows-static
+          vcpkg install libmariadb:x64-windows-static
           vcpkg install libpq:x64-windows-static
         env:
           VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
 
       - name: 编译 vaultwarden
-        run: cargo build --features "sqlite,postgresql" --release
+        run: cargo build --features "sqlite,mysql,postgresql" --release
         working-directory: vaultwarden
         env:
           RUSTFLAGS: "-Ctarget-feature=+crt-static"
           POSTGRESQL_LIB_DIR: "${{ github.workspace }}/vcpkg/installed/x64-windows-static/lib"
+          MYSQLCLIENT_VERSION: "3.1.0"
+          MYSQLCLIENT_LIB_DIR: "${{ github.workspace }}/vcpkg/installed/x64-windows-static/lib"
+          MYSQLCLIENT_INCLUDE_DIR: "${{ github.workspace }}/vcpkg/installed/x64-windows-static/include/mysql/mariadb"
 
       - name: 移动文件
         run: move .\vaultwarden\target\release\vaultwarden.exe .\vaultwarden.exe
@@ -97,19 +101,49 @@ jobs:
         id: get_version
         run: |
           $version_output = .\vaultwarden.exe -v
-          $vaultwarden_version = ($version_output | Select-String -Pattern "Vaultwarden (\S+)").Matches.Groups[1].Value
-          $web_vault_version = ($version_output | Select-String -Pattern "Web-Vault (\S+)").Matches.Groups[1].Value
-
-          echo "Vaultwarden version: $vaultwarden_version"
-          echo "Web-Vault version: $web_vault_version"
+          $vaultwarden_version = ($version_output | Select-String -Pattern "Vaultwarden (\S+)").Matches.Groups.Value
+          $web_vault_version = ($version_output | Select-String -Pattern "Web-Vault (\S+)").Matches.Groups.Value
 
           echo "vaultwarden_version=$vaultwarden_version" >> $env:GITHUB_OUTPUT
           echo "web_vault_version=$web_vault_version" >> $env:GITHUB_OUTPUT
 
-      - name: 打包文件
-        uses: actions/upload-artifact@v4
+      - name: 压缩 web-vault
+        run: tar -czvf web-vault.tar.gz web-vault
+
+      - name: 创建 GitHub Release
+        if: ${{ github.event.inputs.tag_choice == 'release' || github.event.inputs.tag_choice == 'custom' }}
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          name: Vaultwarden_${{ steps.get_version.outputs.vaultwarden_version }}_${{ steps.get_version.outputs.web_vault_version }}
-          path: |
-            vaultwarden.exe
-            web-vault
+          tag_name: v${{ steps.get_version.outputs.vaultwarden_version }}-web${{ steps.get_version.outputs.web_vault_version }}
+          release_name: "Vaultwarden ${{ steps.get_version.outputs.vaultwarden_version }} (Web ${{ steps.get_version.outputs.web_vault_version }})"
+          body: |
+            ### 构建信息
+            - Vaultwarden 版本: `${{ steps.get_version.outputs.vaultwarden_version }}`
+            - Web-Vault 版本: `${{ steps.get_version.outputs.web_vault_version }}`
+          draft: false
+          prerelease: false
+
+      - name: 上传 vaultwarden.exe
+        if: ${{ github.event.inputs.tag_choice == 'release' || github.event.inputs.tag_choice == 'custom' }}
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./vaultwarden.exe
+          asset_name: "vaultwarden_${{ steps.get_version.outputs.vaultwarden_version }}.exe"
+          asset_content_type: application/octet-stream
+
+      - name: 上传 web-vault
+        if: ${{ github.event.inputs.tag_choice == 'release' || github.event.inputs.tag_choice == 'custom' }}
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./web-vault.tar.gz
+          asset_name: "web-vault_${{ steps.get_version.outputs.web_vault_version }}.tar.gz"
+          asset_content_type: application/gzip
