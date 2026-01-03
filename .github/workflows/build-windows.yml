@@ -89,7 +89,8 @@ jobs:
         working-directory: vaultwarden
         env:
           RUSTFLAGS: "-Ctarget-feature=+crt-static"
-          MYSQL_LIB_DIR: "${{ github.workspace }}/vcpkg/installed/x64-windows-static-md/lib"
+          MYSQLCLIENT_LIB_DIR: "${{ github.workspace }}/vcpkg/installed/x64-windows-static-md/lib"
+          MYSQLCLIENT_VERSION: "mariadb"
           POSTGRESQL_LIB_DIR: "${{ github.workspace }}/vcpkg/installed/x64-windows-static-md/lib"
 
       - name: 移动文件
