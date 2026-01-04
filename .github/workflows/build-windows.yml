@@ -49,6 +49,9 @@ jobs:
         run: git switch --detach "${{ steps.get_tag.outputs.tag }}"
         working-directory: vaultwarden
 
+      - name: 复制 .env.template
+        run: copy vaultwarden\.env.template .env.template
+
       - name: 下载 web-vault
         run: |
           $Release = Invoke-RestMethod -Uri "https://api.github.com/repos/dani-garcia/bw_web_builds/releases/latest"
