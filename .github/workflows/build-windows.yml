@@ -1,4 +1,4 @@
-name: Vaultwarden Windows Build
+name: Vaultwarden Windows Build Full Database
 
 on:
   workflow_dispatch:
