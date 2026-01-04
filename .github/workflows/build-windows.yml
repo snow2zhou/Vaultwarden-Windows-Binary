@@ -113,8 +113,13 @@ jobs:
           echo "vaultwarden_version=$vaultwarden_version" >> $env:GITHUB_OUTPUT
           echo "web_vault_version=$web_vault_version" >> $env:GITHUB_OUTPUT
 
-      - name: 压缩 web-vault
-        run: tar -czvf web-vault.tar.gz web-vault
+      - name: 打包所有文件
+        run: |
+          mkdir vaultwarden
+          copy vaultwarden.exe vaultwarden
+          copy web-vault vaultwarden
+          copy .env.template vaultwarden
+          tar -czvf vaultwarden-full-${{ steps.get_version.outputs.vaultwarden_version }}-${{ steps.get_version.outputs.web_vault_version }}.tar.gz dist
 
       - name: 创建 GitHub Release
         if: ${{ github.event.inputs.tag_choice == 'release' || github.event.inputs.tag_choice == 'custom' }}
@@ -132,35 +137,13 @@ jobs:
           draft: false
           prerelease: false
 
-      - name: 上传 vaultwarden.exe
+      - name: 上传完整压缩包
         if: ${{ github.event.inputs.tag_choice == 'release' || github.event.inputs.tag_choice == 'custom' }}
         uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./vaultwarden.exe
-          asset_name: "vaultwarden_${{ steps.get_version.outputs.vaultwarden_version }}.exe"
-          asset_content_type: application/octet-stream
-
-      - name: 上传 web-vault
-        if: ${{ github.event.inputs.tag_choice == 'release' || github.event.inputs.tag_choice == 'custom' }}
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./web-vault.tar.gz
-          asset_name: "web-vault_${{ steps.get_version.outputs.web_vault_version }}.tar.gz"
+          asset_path: ./vaultwarden-full-${{ steps.get_version.outputs.vaultwarden_version }}-${{ steps.get_version.outputs.web_vault_version }}.tar.gz
+          asset_name: "vaultwarden-${{ steps.get_version.outputs.vaultwarden_version }}-${{ steps.get_version.outputs.web_vault_version }}.tar.gz"
           asset_content_type: application/gzip
-
-      - name: 上传 .env.template
-        if: ${{ github.event.inputs.tag_choice == 'release' || github.event.inputs.tag_choice == 'custom' }}
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./.env.template
-          asset_name: ".env.template"
-          asset_content_type: text/plain
