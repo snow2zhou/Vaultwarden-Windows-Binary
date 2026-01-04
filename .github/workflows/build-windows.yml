@@ -123,7 +123,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: v${{ steps.get_version.outputs.vaultwarden_version }}-web-${{ steps.get_version.outputs.web_vault_version }
+          tag_name: v${{ steps.get_version.outputs.vaultwarden_version }}-web-${{ steps.get_version.outputs.web_vault_version }}
           release_name: "v${{ steps.get_version.outputs.vaultwarden_version }}"
           body: |
             ### 构建信息
