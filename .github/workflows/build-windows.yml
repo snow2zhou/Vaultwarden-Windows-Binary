@@ -68,7 +68,7 @@ jobs:
 
           Write-Host "Extracting..."
           if (-not (Test-Path -Path $OutPath)) {
-              New-Item -ItemType Directory -Path $WebVaultDestDir
+              New-Item -ItemType Directory -Path $OutPath
           }
           tar -xf $FileName -C $OutPath
 
