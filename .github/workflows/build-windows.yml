@@ -70,7 +70,7 @@ jobs:
           if (-not (Test-Path -Path $OutPath)) {
               New-Item -ItemType Directory -Path $OutPath
           }
-          tar -xf $FileName -C $OutPath
+          tar -xf $FileName -C $OutPath --strip-components=1
 
       - name: 配置 vcpkg 缓存
         uses: actions/github-script@v7
@@ -78,7 +78,6 @@ jobs:
           script: |
             core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
             core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
-
 
       - name: 使用vcpkg安装依赖
         run: |
@@ -88,6 +87,12 @@ jobs:
           vcpkg install libpq:x64-windows-static
         env:
           VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
+          
+      - name: 缓存vcpkg依赖
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/vcpkg/installed
+          key: vcpkg-${{ hashFiles('**/vcpkg.json') }}
 
       - name: 编译 vaultwarden
         run: cargo build --features "sqlite,mysql,postgresql" --release
@@ -104,14 +109,17 @@ jobs:
 
       - name: 下载 .env.template
         run: |
-          Invoke-WebRequest -Uri "https://raw.githubusercontent.com/dani-garcia/vaultwarden/main/.env.template" -OutFile .env.template
+          $tag = "${{ steps.get_tag.outputs.tag }}"
+          if (-not $tag) { $tag = "main" }
+          $url = "https://raw.githubusercontent.com/dani-garcia/vaultwarden/$tag/.env.template"
+          Invoke-WebRequest -Uri $url -OutFile .env.template
 
       - name: 版本信息
         id: get_version
         run: |
           $version_output = .\vaultwarden.exe -v
-          $vaultwarden_version = ($version_output | Select-String -Pattern "Vaultwarden (\S+)").Matches.Groups[1].Value
-          $web_vault_version = ($version_output | Select-String -Pattern "Web-Vault (\S+)").Matches.Groups[1].Value
+          $vaultwarden_version = ($version_output | Select-String -Pattern "(?i)Vaultwarden (\S+)").Matches.Groups[1].Value
+          $web_vault_version = ($version_output | Select-String -Pattern "(?i)Web-Vault (\S+)").Matches.Groups[1].Value
 
           echo "vaultwarden_version=$vaultwarden_version" >> $env:GITHUB_OUTPUT
           echo "web_vault_version=$web_vault_version" >> $env:GITHUB_OUTPUT
@@ -131,12 +139,12 @@ jobs:
       - name: 创建 GitHub Release
         if: ${{ github.event.inputs.tag_choice == 'release' || github.event.inputs.tag_choice == 'custom' }}
         id: create_release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           files: |
-            vaultwarden-full-*-web-*.tar.gz
+            ./vaultwarden-full-${{ steps.get_version.outputs.vaultwarden_version }}-web-${{ steps.get_version.outputs.web_vault_version }}.tar.gz
           tag_name: v${{ steps.get_version.outputs.vaultwarden_version }}-web-${{ steps.get_version.outputs.web_vault_version }}
           release_name: "v${{ steps.get_version.outputs.vaultwarden_version }}-web-${{ steps.get_version.outputs.web_vault_version }}"
           body: |
