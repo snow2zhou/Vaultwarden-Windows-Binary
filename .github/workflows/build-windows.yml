@@ -120,7 +120,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: v${{ steps.get_version.outputs.vaultwarden_version }}-web${{ steps.get_version.outputs.web_vault_version }}
-          release_name: "Vaultwarden_${{ steps.get_version.outputs.vaultwarden_version }}_(Web_${{ steps.get_version.outputs.web_vault_version }})"
+          release_name: "v${{ steps.get_version.outputs.vaultwarden_version }}"
           body: |
             ### 构建信息
             - Vaultwarden 版本: `${{ steps.get_version.outputs.vaultwarden_version }}`
