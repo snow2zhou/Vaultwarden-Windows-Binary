@@ -119,12 +119,12 @@ jobs:
           copy vaultwarden.exe vaultwarden
           copy web-vault vaultwarden
           copy .env.template vaultwarden
-          tar -czvf vaultwarden-full-${{ steps.get_version.outputs.vaultwarden_version }}-${{ steps.get_version.outputs.web_vault_version }}.tar.gz dist
+          tar -czvf vaultwarden-full-${{ steps.get_version.outputs.vaultwarden_version }}-${{ steps.get_version.outputs.web_vault_version }}.tar.gz vaultwarden
 
       - name: 创建 GitHub Release
         if: ${{ github.event.inputs.tag_choice == 'release' || github.event.inputs.tag_choice == 'custom' }}
         id: create_release
-        uses: actions/create-release@v1
+        uses: softprops/action-gh-release@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
