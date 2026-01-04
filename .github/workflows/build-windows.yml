@@ -67,7 +67,10 @@ jobs:
           Invoke-WebRequest -Uri $DownloadUrl -OutFile $FileName
 
           Write-Host "Extracting..."
-          tar -xf $FileName
+          if (-not (Test-Path -Path $OutPath)) {
+              New-Item -ItemType Directory -Path $WebVaultDestDir
+          }
+          tar -xf $FileName -C $OutPath
 
       - name: 配置 vcpkg 缓存
         uses: actions/github-script@v7
@@ -117,10 +120,14 @@ jobs:
         run: |
           mkdir temp_package
           copy vaultwarden.exe temp_package
-          copy web-vault temp_package
+          if (-not (Test-Path -Path .\web-vault)) {
+              Write-Error "Web-vault directory not found. Ensure the '下载 web-vault' step correctly extracts content into a 'web-vault' directory."
+              exit 1
+          }
+          copy .\web-vault temp_package
           copy .env.template temp_package
           $archive_name = "vaultwarden-full-${{ steps.get_version.outputs.vaultwarden_version }}-${{ steps.get_version.outputs.web_vault_version }}.tar.gz"
-          tar -czvf $archive_name -C temp_package
+          tar -czvf $archive_name -C temp_package .
 
       - name: 创建 GitHub Release
         if: ${{ github.event.inputs.tag_choice == 'release' || github.event.inputs.tag_choice == 'custom' }}
