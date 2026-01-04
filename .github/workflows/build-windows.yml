@@ -1,4 +1,4 @@
-name: Vaultwarden Windows Build Full Database
+name: Vaultwarden Windows Build (Full DB Support)
 
 on:
   workflow_dispatch:
@@ -107,8 +107,8 @@ jobs:
         id: get_version
         run: |
           $version_output = .\vaultwarden.exe -v
-          $vaultwarden_version = ($version_output | Select-String -Pattern 'v(\d+\.\d+\.\d+)').Matches.Groups.Value
-          $web_vault_version = ($version_output | Select-String -Pattern 'Web-Vault v(\d+\.\d+\.\d+)').Matches.Groups.Value
+          $vaultwarden_version = ($version_output | Select-String -Pattern "Vaultwarden (\S+)").Matches.Groups[1].Value
+          $web_vault_version = ($version_output | Select-String -Pattern "Web-Vault (\S+)").Matches.Groups[1].Value
 
           echo "vaultwarden_version=$vaultwarden_version" >> $env:GITHUB_OUTPUT
           echo "web_vault_version=$web_vault_version" >> $env:GITHUB_OUTPUT
