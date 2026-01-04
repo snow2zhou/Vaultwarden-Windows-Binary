@@ -19,6 +19,8 @@ on:
 jobs:
   build:
     runs-on: windows-latest
+    permissions:
+      contents: write
 
     steps:
       - name: 检查工具版本
@@ -113,12 +115,12 @@ jobs:
       - name: 创建 GitHub Release
         if: ${{ github.event.inputs.tag_choice == 'release' || github.event.inputs.tag_choice == 'custom' }}
         id: create_release
-        uses: actions/create-release@v1
+        uses: actions/create-release@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: v${{ steps.get_version.outputs.vaultwarden_version }}-web${{ steps.get_version.outputs.web_vault_version }}
-          release_name: "Vaultwarden ${{ steps.get_version.outputs.vaultwarden_version }} (Web ${{ steps.get_version.outputs.web_vault_version }})"
+          release_name: "Vaultwarden_${{ steps.get_version.outputs.vaultwarden_version }}_(Web_${{ steps.get_version.outputs.web_vault_version }})"
           body: |
             ### 构建信息
             - Vaultwarden 版本: `${{ steps.get_version.outputs.vaultwarden_version }}`
