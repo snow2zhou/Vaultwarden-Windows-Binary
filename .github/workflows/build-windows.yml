@@ -137,7 +137,7 @@ jobs:
         with:
           files: |
             vaultwarden-full-*-web-*.tar.gz
-          tag_name: v${{ steps.get_version.outputs.vaultwarden_version }}
+          tag_name: v${{ steps.get_version.outputs.vaultwarden_version }}-web-${{ steps.get_version.outputs.web_vault_version }}
           release_name: "v${{ steps.get_version.outputs.vaultwarden_version }}-web-${{ steps.get_version.outputs.web_vault_version }}"
           body: |
             ### 构建信息
