@@ -124,10 +124,9 @@ jobs:
               Write-Error "Web-vault directory not found. Ensure the '下载 web-vault' step correctly extracts content into a 'web-vault' directory."
               exit 1
           }
-          copy .\web-vault temp_package
+          xcopy /E /I web-vault temp_package\web-vault
           copy .env.template temp_package
-          $archive_name = "vaultwarden-full-${{ steps.get_version.outputs.vaultwarden_version }}-${{ steps.get_version.outputs.web_vault_version }}.tar.gz"
-          tar -czvf $archive_name -C temp_package .
+          tar -czvf vaultwarden-full-${{ steps.get_version.outputs.vaultwarden_version }}-web-${{ steps.get_version.outputs.web_vault_version }}.tar.gz -C temp_package .
 
       - name: 创建 GitHub Release
         if: ${{ github.event.inputs.tag_choice == 'release' || github.event.inputs.tag_choice == 'custom' }}
@@ -136,22 +135,11 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: v${{ steps.get_version.outputs.vaultwarden_version }}-web-${{ steps.get_version.outputs.web_vault_version }}
-          release_name: "v${{ steps.get_version.outputs.vaultwarden_version }}"
+          files: |
+            vaultwarden-full-*-web-*.tar.gz
+          tag_name: v${{ steps.get_version.outputs.vaultwarden_version }}
+          release_name: "v${{ steps.get_version.outputs.vaultwarden_version }}-web-${{ steps.get_version.outputs.web_vault_version }}"
           body: |
             ### 构建信息
             - Vaultwarden 版本: `${{ steps.get_version.outputs.vaultwarden_version }}`
             - Web-Vault 版本: `${{ steps.get_version.outputs.web_vault_version }}`
-          draft: false
-          prerelease: false
-
-      - name: 上传完整压缩包
-        if: ${{ github.event.inputs.tag_choice == 'release' || github.event.inputs.tag_choice == 'custom' }}
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./vaultwarden-full-${{ steps.get_version.outputs.vaultwarden_version }}-${{ steps.get_version.outputs.web_vault_version }}.tar.gz
-          asset_name: "vaultwarden-${{ steps.get_version.outputs.vaultwarden_version }}-${{ steps.get_version.outputs.web_vault_version }}.tar.gz"
-          asset_content_type: application/gzip
