@@ -50,6 +50,9 @@ jobs:
           rustup target add ${{ matrix.target-triple }} --toolchain stable
           rustup target add ${{ matrix.target-triple }} --toolchain nightly
 
+      - name: 添加 nightly rust-src 组件
+        run: rustup component add rust-src --toolchain nightly-x86_64-pc-windows-msvc
+
       - name: 设置Rust工具链 (stable)
         uses: actions-rs/toolchain@v1
         with:
