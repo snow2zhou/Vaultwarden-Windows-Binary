@@ -166,7 +166,6 @@ jobs:
         run: |
           $vcpkgInstalledPath = "$env:USERPROFILE\vcpkg\installed"
           $mariadbPath = Join-Path $vcpkgInstalledPath "${{ matrix.vcpkg_arch }}"
-          $libDir = Join-Path $mariadbPath "lib"
           $includeDir = Join-Path $mariadbPath "include\mysql\mariadb"
           $version = ""
           
