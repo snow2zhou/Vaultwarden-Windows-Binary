@@ -97,6 +97,7 @@ jobs:
           } elseif ("${{ github.event.inputs.tag_choice }}" -eq "latest") {
             # 对于 latest，我们通常不指定 tag，让 checkout 获取最新 commit
             Write-Host "Using 'latest' tag choice, will checkout latest commit."
+            # 当 tag_choice 是 latest 时，我们不设置 vaultwardenTag，checkout 会使用默认分支
           } else {
             Write-Host "Unknown tag_choice, defaulting to main branch."
           }
@@ -108,12 +109,14 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: dani-garcia/vaultwarden
-          # 根据 tag_choice 和 vaultwarden_tag 来决定 ref
-          ref: ${{ steps.get_tag.outputs.vaultwarden_tag || (steps.get_tag.outputs.tag_choice == 'latest' ? '' : 'main') }}
+          # 仅当 vaultwardenTag 被设置时（即 custom 或 release），才指定 ref
+          # 否则，actions/checkout 将会拉取默认分支（main）的最新 commit
+          ref: ${{ steps.get_tag.outputs.vaultwarden_tag }}
           path: vaultwarden
 
-      - name: 切换版本 (如果不是 latest 或 main)
-        # 仅当指定了 custom tag 或 release tag 时才执行 checkout
+      - name: 切换版本 (如果选择了 'release' 或 'custom')
+        # 仅当 vaultwarden_tag 已设置（即 release 或 custom），才需要执行 git checkout
+        # 如果是 'latest'，则不需要执行 checkout，因为 actions/checkout 已经拉取了最新
         if: ${{ steps.get_tag.outputs.vaultwarden_tag != '' && steps.get_tag.outputs.tag_choice != 'latest' }}
         run: git checkout ${{ steps.get_tag.outputs.vaultwarden_tag }}
         working-directory: vaultwarden
@@ -194,23 +197,17 @@ jobs:
 
       - name: 版本检测
         id: version
-        # 关键修改：这里我们将 PowerShell 命令拆分成多行，并使用 ' ' 包装，避免 `|` 符号被 YAML 解析
-        # 并且确保 PowerShell 命令本身中的 `|` 管道符被正确执行
         run: |
           $vaultwardenExe = "./vaultwarden-${{ matrix.arch }}.exe"
           if (-not (Test-Path $vaultwardenExe)) {
               Write-Error "Vaultwarden executable not found at $vaultwardenExe"
               exit 1
           }
-          # 使用 . operator 来执行 PowerShell 命令并捕获输出
           $versionOutput = . $vaultwardenExe -v
-          # 使用 Select-String 来匹配版本号
-          # 请注意，PowerShell 的管道符 '|' 在这里是命令本身的一部分，不会被 YAML 解析
           $versionMatch = $versionOutput | Select-String -Pattern "Vaultwarden (\d+\.\d+\.\d+)"
           if ($versionMatch) {
               $version = $versionMatch.Matches.Groups[1].Value
               Write-Host "Detected Vaultwarden version: $version"
-              # 将版本号写入 GITHUB_OUTPUT
               $outputFilePath = Join-Path $env:GITHUB_OUTPUT "github_output_file.txt"
               "version=$version" | Out-File -FilePath $outputFilePath -Append
           } else {
