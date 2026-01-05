@@ -70,7 +70,9 @@ jobs:
           $Release = Invoke-RestMethod -Uri "https://api.github.com/repos/dani-garcia/bw_web_builds/releases/latest"
           $Asset = $Release.assets | Where-Object {
               ($_.name -like "web-vault-*.tar.gz") -or 
-              ($_.name -match "^web-vault-v\d+\.\d+\.\d+\.tar\.gz$")
+              ($_.name -match "^web-vault-v\d+\.\d+\.\d+\.tar\.gz$") or
+              ($_.name -like "*web*.tar.gz") or
+              ($_.name -like "*.tar.gz")
           }
 
           if (-not $Asset) {
