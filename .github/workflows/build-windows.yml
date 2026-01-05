@@ -41,6 +41,29 @@ jobs:
       - name: 检查工具版本
         run: git version && cargo version && vcpkg version
 
+      - name: 安装Rust目标
+        run: |
+          rustup target add ${{ matrix.target-triple }}
+          rustup target add ${{ matrix.target-triple }} --toolchain stable
+
+      - name: 设置Rust工具链
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          target: ${{ matrix.target-triple }}
+          toolchain: stable
+
+      - name: 安装交叉编译目标
+        run: |
+          rustup target add ${{ matrix.target-triple }} || (
+            echo "开始回退安装方式..." &&
+            rustup toolchain install stable-${{ matrix.target-triple }} &&
+            rustup component add rust-std-${{ matrix.target-triple }}
+          )
+        env:
+          VCPKGRS_TRIPLET: ${{ matrix.vcpkg_arch }}
+          CARGO_TARGET_I686_PC_WINDOWS_MSVC_LINKER: lld-link
+
       - name: 获取版本号
         id: get_tag
         run: |
@@ -126,10 +149,16 @@ jobs:
           key: ${{ runner.os }}-vcpkg-${{ matrix.arch }}-${{ hashFiles('**/vcpkg.json') }}
 
       - name: 编译项目
-        run: cargo build --features "sqlite,mysql,postgresql" --release --target ${{ matrix.target-triple }}
+        run: 
+          rustup target add ${{ matrix.target-triple }}
+          cargo build --features "sqlite,mysql,postgresql" \
+            --release \
+            --target ${{ matrix.target-triple }} \
+            -Z build-std=std,panic=abort
         working-directory: vaultwarden
         env:
-          RUSTFLAGS: "-Ctarget-feature=+crt-static"
+          RUSTFLAGS: "-Ctarget-feature=+crt-static -Clinker=lld-link"
+          CARGO_TARGET_DIR: "target/${{ matrix.target-triple }}"
           POSTGRESQL_LIB_DIR: "${{ github.workspace }}/vcpkg/installed/${{ matrix.vcpkg_arch }}/lib"
           MYSQLCLIENT_LIB_DIR: "${{ github.workspace }}/vcpkg/installed/${{ matrix.vcpkg_arch }}/lib"
           MYSQLCLIENT_INCLUDE_DIR: "${{ github.workspace }}/vcpkg/installed/${{ matrix.vcpkg_arch }}/include/mysql/mariadb"
