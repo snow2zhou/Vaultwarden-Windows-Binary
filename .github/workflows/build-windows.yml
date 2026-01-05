@@ -148,12 +148,15 @@ jobs:
             ~/vcpkg/buildtrees
           key: ${{ runner.os }}-vcpkg-${{ matrix.arch }}-${{ hashFiles('**/vcpkg.json') }}
 
+      - name: 添加编译目标
+        run: rustup target add ${{ matrix.target-triple }}
+
       - name: 编译项目
         run: 
-          rustup target add ${{ matrix.target-triple }}
-          cargo build --features "sqlite,mysql,postgresql" \
-            --release \
-            --target ${{ matrix.target-triple }} \
+          cargo build `
+            --features "sqlite,mysql,postgresql" `
+            --release `
+            --target ${{ matrix.target-triple }} `
             -Z build-std=std,panic=abort
         working-directory: vaultwarden
         env:
