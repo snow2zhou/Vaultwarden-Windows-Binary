@@ -1,4 +1,4 @@
-name: Vaultwarden Windows Build (Full DB Support)
+name: Vaultwarden Windows Build (Multi-Arch)
 
 on:
   workflow_dispatch:
@@ -18,7 +18,22 @@ on:
 
 jobs:
   build:
-    runs-on: windows-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [windows-latest]
+        arch: [x86, x64]
+        target-triple: [i686-pc-windows-msvc, x86_64-pc-windows-msvc]
+        vcpkg_arch: [x86-windows-static, x64-windows-static]
+        include:
+          - arch: x86
+            target-triple: i686-pc-windows-msvc
+            vcpkg_arch: x86-windows-static
+            bits: 32
+          - arch: x64
+            target-triple: x86_64-pc-windows-msvc
+            vcpkg_arch: x64-windows-static
+            bits: 64
     permissions:
       contents: write
 
@@ -26,128 +41,86 @@ jobs:
       - name: 检查工具版本
         run: git version && cargo version && vcpkg version
 
-      - name: vaultwarden 版本选择
+      - name: 获取版本号
         id: get_tag
         run: |
           if ("${{ github.event.inputs.tag_choice }}" -eq "release") {
             $release = Invoke-RestMethod -Uri "https://api.github.com/repos/dani-garcia/vaultwarden/releases/latest"
-            echo "Using release tag: $($release.tag_name)"
             echo "tag=$($release.tag_name)" >> $env:GITHUB_OUTPUT
-          } elseif ("${{ github.event.inputs.tag_choice }}" -eq "latest") {
-            echo "Using latest commit"
-            echo "tag=" >> $env:GITHUB_OUTPUT
           } elseif ("${{ github.event.inputs.tag_choice }}" -eq "custom") {
-            echo "Using custom tag: ${{ github.event.inputs.tag }}"
             echo "tag=${{ github.event.inputs.tag }}" >> $env:GITHUB_OUTPUT
+          } else {
+            echo "tag=" >> $env:GITHUB_OUTPUT
           }
 
-      - name: 克隆 vaultwarden 仓库
-        run: git clone https://github.com/dani-garcia/vaultwarden
+      - name: 克隆仓库
+        uses: actions/checkout@v4
+        with:
+          repository: dani-garcia/vaultwarden
+          ref: ${{ steps.get_tag.outputs.tag || 'main' }}
+          path: vaultwarden
 
       - name: 切换版本
         if: ${{ steps.get_tag.outputs.tag != '' }}
-        run: git switch --detach "${{ steps.get_tag.outputs.tag }}"
+        run: git checkout ${{ steps.get_tag.outputs.tag }}
         working-directory: vaultwarden
 
       - name: 下载 web-vault
         run: |
           $Release = Invoke-RestMethod -Uri "https://api.github.com/repos/dani-garcia/bw_web_builds/releases/latest"
-          $Asset = $Release.assets | Where-Object { $_.name -like "*.tar.gz" }
+          $Asset = $Release.assets | Where-Object { $_.name -like "web-vault-*.tar.gz" }
 
-          if (-not $Asset) {
-            Write-Error "No .tar.gz asset found."
-            exit 1
-          }
+          Invoke-WebRequest -Uri $Asset.browser_download_url -OutFile web-vault.tar.gz
+          tar -xf web-vault.tar.gz -C web-vault --strip-components=1
 
-          $DownloadUrl = $Asset.browser_download_url
-          $FileName = $Asset.name
-          $OutPath = "web-vault"
-
-          Write-Host "Downloading $FileName..."
-          Invoke-WebRequest -Uri $DownloadUrl -OutFile $FileName
-
-          Write-Host "Extracting..."
-          if (-not (Test-Path -Path $OutPath)) {
-              New-Item -ItemType Directory -Path $OutPath
-          }
-          tar -xf $FileName -C $OutPath --strip-components=1
-
-      - name: 配置 vcpkg 缓存
-        uses: actions/github-script@v7
-        with:
-          script: |
-            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
-            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
-
-      - name: 使用vcpkg安装依赖
+      - name: 配置vcpkg
         run: |
           vcpkg integrate install
-          vcpkg install openssl:x64-windows-static
-          vcpkg install libmariadb:x64-windows-static
-          vcpkg install libpq:x64-windows-static
+          vcpkg install openssl:${{ matrix.vcpkg_arch }}
+          vcpkg install libmariadb:${{ matrix.vcpkg_arch }}
+          vcpkg install libpq:${{ matrix.vcpkg_arch }}
         env:
           VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
-          
-      - name: 缓存vcpkg依赖
+          VCPKG_DEFAULT_TRIPLET: ${{ matrix.vcpkg_arch }}
+
+      - name: 缓存vcpkg
         uses: actions/cache@v4
         with:
-          path: ${{ github.workspace }}/vcpkg/installed
-          key: vcpkg-${{ hashFiles('**/vcpkg.json') }}
+          path: |
+            ~/vcpkg/installed
+            ~/vcpkg/buildtrees
+          key: ${{ runner.os }}-vcpkg-${{ matrix.arch }}-${{ hashFiles('**/vcpkg.json') }}
 
-      - name: 编译 vaultwarden
-        run: cargo build --features "sqlite,mysql,postgresql" --release
+      - name: 编译项目
+        run: cargo build --features "sqlite,mysql,postgresql" --release --target ${{ matrix.target-triple }}
         working-directory: vaultwarden
         env:
           RUSTFLAGS: "-Ctarget-feature=+crt-static"
-          POSTGRESQL_LIB_DIR: "${{ github.workspace }}/vcpkg/installed/x64-windows-static/lib"
-          MYSQLCLIENT_VERSION: "3.1.0"
-          MYSQLCLIENT_LIB_DIR: "${{ github.workspace }}/vcpkg/installed/x64-windows-static/lib"
-          MYSQLCLIENT_INCLUDE_DIR: "${{ github.workspace }}/vcpkg/installed/x64-windows-static/include/mysql/mariadb"
+          POSTGRESQL_LIB_DIR: "${{ github.workspace }}/vcpkg/installed/${{ matrix.vcpkg_arch }}/lib"
+          MYSQLCLIENT_LIB_DIR: "${{ github.workspace }}/vcpkg/installed/${{ matrix.vcpkg_arch }}/lib"
+          MYSQLCLIENT_INCLUDE_DIR: "${{ github.workspace }}/vcpkg/installed/${{ matrix.vcpkg_arch }}/include/mysql/mariadb"
 
       - name: 移动文件
-        run: move .\vaultwarden\target\release\vaultwarden.exe .\vaultwarden.exe
-
-      - name: 下载 .env.template
         run: |
-          $tag = "${{ steps.get_tag.outputs.tag }}"
-          if (-not $tag) { $tag = "main" }
-          $url = "https://raw.githubusercontent.com/dani-garcia/vaultwarden/$tag/.env.template"
-          Invoke-WebRequest -Uri $url -OutFile .env.template
+          $targetDir = "vaultwarden/target/${{ matrix.target-triple }}/release"
+          Move-Item -Path "$targetDir/vaultwarden.exe" -Destination "./vaultwarden-${{ matrix.arch }}.exe"
 
-      - name: 版本信息
-        id: get_version
+      - name: 版本检测
+        id: version
         run: |
-          $version_output = .\vaultwarden.exe -v
-          $vaultwarden_version = ($version_output | Select-String -Pattern "(?i)Vaultwarden (\S+)").Matches.Groups[1].Value
-          $web_vault_version = ($version_output | Select-String -Pattern "(?i)Web-Vault (\S+)").Matches.Groups[1].Value
+          $version = .\vaultwarden-${{ matrix.arch }}.exe -v | Select-String -Pattern "Vaultwarden (\d+\.\d+\.\d+)"
+          echo "version=$($version.Matches.Groups.Value)" >> $env:GITHUB_OUTPUT
 
-          echo "vaultwarden_version=$vaultwarden_version" >> $env:GITHUB_OUTPUT
-          echo "web_vault_version=$web_vault_version" >> $env:GITHUB_OUTPUT
-
-      - name: 打包所有文件
+      - name: 打包分发
         run: |
-          mkdir temp_package
-          copy vaultwarden.exe temp_package
-          if (-not (Test-Path -Path .\web-vault)) {
-              Write-Error "Web-vault directory not found. Ensure the '下载 web-vault' step correctly extracts content into a 'web-vault' directory."
-              exit 1
-          }
-          xcopy /E /I web-vault temp_package\web-vault
-          copy .env.template temp_package
-          tar -czvf vaultwarden-full-${{ steps.get_version.outputs.vaultwarden_version }}-web-${{ steps.get_version.outputs.web_vault_version }}.tar.gz -C temp_package .
+          $packageName = "vaultwarden-${{ matrix.arch }}-${{ steps.version.outputs.version }}.zip"
+          Compress-Archive -Path "vaultwarden-${{ matrix.arch }}.exe", "web-vault", ".env.template" -DestinationPath $packageName
 
-      - name: 创建 GitHub Release
-        if: ${{ github.event.inputs.tag_choice == 'release' || github.event.inputs.tag_choice == 'custom' }}
-        id: create_release
+      - name: 创建Release
+        if: ${{ github.event.inputs.tag_choice != 'latest' }}
         uses: softprops/action-gh-release@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           files: |
-            ./vaultwarden-full-${{ steps.get_version.outputs.vaultwarden_version }}-web-${{ steps.get_version.outputs.web_vault_version }}.tar.gz
-          tag_name: v${{ steps.get_version.outputs.vaultwarden_version }}-web-${{ steps.get_version.outputs.web_vault_version }}
-          release_name: "v${{ steps.get_version.outputs.vaultwarden_version }}-web-${{ steps.get_version.outputs.web_vault_version }}"
-          body: |
-            ### 构建信息
-            - Vaultwarden 版本: `${{ steps.get_version.outputs.vaultwarden_version }}`
-            - Web-Vault 版本: `${{ steps.get_version.outputs.web_vault_version }}`
+            vaultwarden-*-${{ steps.version.outputs.version }}.zip
+          tag_name: v${{ steps.version.outputs.version }}-${{ matrix.arch }}
+          name: "Vaultwarden ${{ steps.version.outputs.version }} (${{ matrix.arch }})"
