@@ -92,21 +92,18 @@ jobs:
           [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
           try {
-            Invoke-WebRequest -Uri $Asset.browser_download_url -OutFile web-vault.tar.gz -UseBasicParsing -ErrorAction Stop
+            $DownloadUrl = $Asset.browser_download_url
+            $FileName = $Asset.name
+            $OutPath = "web-vault"
+            Write-Host "Downloading $FileName..."
+            Invoke-WebRequest -Uri $DownloadUrl -OutFile $FileName
+            Write-Host "Extracting..."
+            if (-not (Test-Path -Path $OutPath)) {
+              New-Item -ItemType Directory -Path $OutPath
+            }
+            tar -xf $FileName -C $OutPath --strip-components=1
           }catch{
             Write-Error "💥 下载失败，技术细节：$($_.Exception.Message)"
-            exit 1
-          }
-
-          if (-not (Test-Path web-vault.tar.gz)) {
-             Write-Error "📁 压缩包未成功下载"
-             exit 1
-            }
-
-          try{
-            tar -xf web-vault.tar.gz -C web-vault --strip-components=1
-          }catch{
-            Write-Error "📂 解压失败，可能原因：文件损坏或权限问题"
             exit 1
           }
 
