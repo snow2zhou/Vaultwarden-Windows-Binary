@@ -90,7 +90,6 @@ jobs:
         id: get_tag
         run: |
           $vaultwardenTag = ""
-          # 使用 github.event.inputs.tag_choice 来获取实际选择的值
           $selectedTagChoice = "${{ github.event.inputs.tag_choice }}"
 
           if ($selectedTagChoice -eq "release") {
@@ -101,14 +100,11 @@ jobs:
             $vaultwardenTag = "${{ github.event.inputs.tag }}"
             Write-Host "Custom tag: $vaultwardenTag"
           } elseif ($selectedTagChoice -eq "latest") {
-            # 对于 latest，我们通常不指定 tag，让 checkout 获取最新 commit
             Write-Host "Using 'latest' tag choice, will checkout latest commit."
-            # 当 tag_choice 是 latest 时，我们不设置 vaultwardenTag，checkout 会使用默认分支
           } else {
             Write-Host "Unknown tag_choice: '$selectedTagChoice', defaulting to main branch."
           }
 
-          # *** 修正点：直接使用 echo >> GITHUB_OUTPUT ***
           echo "vaultwarden_tag=$vaultwardenTag" >> $env:GITHUB_OUTPUT
           echo "tag_choice=$selectedTagChoice" >> $env:GITHUB_OUTPUT
 
@@ -116,31 +112,24 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: dani-garcia/vaultwarden
-          # 仅当 vaultwardenTag 被设置时（即 custom 或 release），才指定 ref
-          # 否则，actions/checkout 将会拉取默认分支（main）的最新 commit
           ref: ${{ steps.get_tag.outputs.vaultwarden_tag }}
           path: vaultwarden
 
       - name: 切换版本 (如果选择了 'release' 或 'custom')
-        # 仅当 vaultwarden_tag 已设置（即 release 或 custom），才需要执行 git checkout
-        # 如果是 'latest'，则不需要执行 checkout，因为 actions/checkout 已经拉取了最新
         if: ${{ steps.get_tag.outputs.vaultwarden_tag != '' && steps.get_tag.outputs.tag_choice != 'latest' }}
         run: git checkout ${{ steps.get_tag.outputs.vaultwarden_tag }}
         working-directory: vaultwarden
 
       - name: 下载 web-vault
         run: |
-          # 确保使用 Tls12
           [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-
           $release = Invoke-RestMethod -Uri "https://api.github.com/repos/dani-garcia/bw_web_builds/releases/latest"
-          # 尝试更通用的匹配方式，同时保留原有的逻辑
           $asset = $release.assets | Where-Object {
               ($_.name -match "^web-vault-v\d+\.\d+\.\d+\.tar\.gz$") -or
               ($_.name -like "web-vault-*.tar.gz") -or
               ($_.name -like "*web*.tar.gz") -or
-              ($_.name -like "*.tar.gz") # 最后尝试更宽泛的匹配
-          } | Select-Object -First 1 # 确保只选择一个匹配项
+              ($_.name -like "*.tar.gz")
+          } | Select-Object -First 1
 
           if (-not $asset) {
               Write-Error "❌ 未找到符合条件的web-vault资产。请检查官方Release命名规范是否已变更。"
@@ -158,8 +147,8 @@ jobs:
           if (-not (Test-Path -Path $outPath)) {
             New-Item -ItemType Directory -Path $outPath -Force
           }
-          # 使用 tar 命令，确保其可用
           tar -xf $fileName -C $outPath --strip-components=1
+        working-directory: vaultwarden # Ensure this step runs within the vaultwarden directory
 
       - name: 查找 libmariadb 版本
         id: get_mariadb_version
@@ -188,9 +177,8 @@ jobs:
           }
 
           if (-not $version) {
-            Write-Warning "Could not automatically detect MariaDB version from include files. Trying to guess from package name or common paths."
-            # 如果自动检测失败，可以尝试设置一个默认值，但这不推荐
-            $version = "3.1.11"
+            Write-Warning "Could not automatically detect MariaDB version from include files. Trying to guess from package name or common paths. Setting to '3.1.11'."
+            $version = "3.1.11" # Fallback, but ideally this should be auto-detected
           }
 
           if (-not $version) {
@@ -200,43 +188,34 @@ jobs:
 
           Write-Host "Detected MariaDB version: $version"
           echo "mariadb_version=$version" >> $env:GITHUB_OUTPUT
+        # This step needs to run within the vaultwarden directory to potentially find headers if vcpkg installed them there relative to project
+        # However, vcpkg installs globally, so the current path is likely fine.
 
       - name: 编译项目 (使用 nightly)
         run: |
-          # 动态生成 target directory
           $targetDirName = "target/nightly-${{ matrix.target-triple }}"
-          # 动态设置 Cargo 环境变量
           $env:CARGO_TARGET_DIR = $targetDirName
 
-          # 动态设置 linker
           $env:RUSTFLAGS = "-C target-feature=+crt-static -Clinker=lld-link"
-          # cargo +nightly build --target ${{ matrix.target-triple }} 应该能自动找到链接器
-          # 如果遇到链接器问题，可以尝试显式指定
-          # if ("${{ matrix.target-triple }}" -eq "i686-pc-windows-msvc") { $env:CARGO_TARGET_I686_PC_WINDOWS_MSVC_LINKER = "link.exe" }
-          # if ("${{ matrix.target-triple }}" -eq "x86_64-pc-windows-msvc") { $env:CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER = "lld-link.exe" }
 
-
-          # 动态设置数据库库路径
           $vcpkgInstalledPath = "$env:USERPROFILE\vcpkg\installed"
           $env:POSTGRESQL_LIB_DIR = Join-Path $vcpkgInstalledPath "${{ matrix.vcpkg_arch }}\lib"
           $env:MYSQLCLIENT_LIB_DIR = Join-Path $vcpkgInstalledPath "${{ matrix.vcpkg_arch }}\lib"
           $env:MYSQLCLIENT_INCLUDE_DIR = Join-Path $vcpkgInstalledPath "${{ matrix.vcpkg_arch }}\include\mysql\mariadb"
 
-          # 检查所需的数据库库是否存在
           if (-not (Test-Path $env:POSTGRESQL_LIB_DIR)) { Write-Warning "PostgreSQL lib dir not found: $env:POSTGRESQL_LIB_DIR" }
           if (-not (Test-Path $env:MYSQLCLIENT_LIB_DIR)) { Write-Warning "MySQLClient lib dir not found: $env:MYSQLCLIENT_LIB_DIR" }
           if (-not (Test-Path $env:MYSQLCLIENT_INCLUDE_DIR)) { Write-Warning "MySQLClient include dir not found: $env:MYSQLCLIENT_INCLUDE_DIR" }
-
+          
+          # Set environment variables for cargo
+          $env:MYSQLCLIENT_VERSION = "${{ steps.get_mariadb_version.outputs.mariadb_version }}"
+          $env:CARGO_HTTP_RETRY = "5"
 
           cargo +nightly build `
             --features "sqlite,mysql,postgresql" `
             --release `
             --target ${{ matrix.target-triple }} `
-            -Z build-std=std,panic_abort `
-            env:
-              MYSQLCLIENT_VERSION: ${{ steps.get_mariadb_version.outputs.mariadb_version }}
-              CARGO_HTTP_RETRY: 5 # 增加 HTTP 重试次数，防止网络瞬断导致 cargo 失败
-
+            -Z build-std=std,panic_abort
         working-directory: vaultwarden
 
       - name: 移动编译产物
@@ -258,7 +237,6 @@ jobs:
           if ($versionMatch) {
               $version = $versionMatch.Matches.Groups[1].Value
               Write-Host "Detected Vaultwarden version: $version"
-              # *** 修正点：直接使用 echo >> GITHUB_OUTPUT ***
               echo "version=$version" >> $env:GITHUB_OUTPUT
           } else {
               Write-Error "Could not detect Vaultwarden version from '$($vaultwardenExe -v)'"
@@ -270,10 +248,11 @@ jobs:
           $packageName = "vaultwarden-${{ matrix.arch }}-${{ steps.version.outputs.version }}.zip"
           $filesToPackage = @(
               "./vaultwarden-${{ matrix.arch }}.exe",
-              "./web-vault",
-              "./.env.template"
+              "./web-vault"
+              # You might want to include the .env.template if it's relevant for users
+              # "./.env.template" 
           )
-          # 检查待打包文件是否存在
+          # Check if files exist before packaging
           foreach ($file in $filesToPackage) {
               if (-not (Test-Path $file)) {
                   Write-Warning "File/Directory not found for packaging: $file"
@@ -282,17 +261,10 @@ jobs:
           Compress-Archive -Path $filesToPackage -DestinationPath $packageName -Force
 
       - name: 创建Release (仅在 tag_choice 不是 'latest' 时)
-        # 仅当 tag_choice 不是 latest 时创建 release
         if: ${{ github.event.inputs.tag_choice != 'latest' }}
         uses: softprops/action-gh-release@v2
         with:
-          # 使用通配符来匹配所有打包的 zip 文件
           files: |
             vaultwarden-*-${{ steps.version.outputs.version }}.zip
-          # Release tag 格式调整，使用 detected version
           tag_name: v${{ steps.version.outputs.version }}
           name: "Vaultwarden ${{ steps.version.outputs.version }} (Windows Builds)"
-          # 可以在此添加 body 来描述 release，例如从 changelog 获取
-          # body: |
-          #   See changelog for details.
-          #   https://github.com/dani-garcia/vaultwarden/releases/tag/v${{ steps.version.outputs.version }}
