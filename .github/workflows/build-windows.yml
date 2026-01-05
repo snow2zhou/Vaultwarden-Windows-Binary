@@ -87,23 +87,27 @@ jobs:
         id: get_tag
         run: |
           $vaultwardenTag = ""
-          if ("${{ github.event.inputs.tag_choice }}" -eq "release") {
+          # 使用 github.event.inputs.tag_choice 来获取实际选择的值
+          $selectedTagChoice = "${{ github.event.inputs.tag_choice }}"
+
+          if ($selectedTagChoice -eq "release") {
             $latestRelease = Invoke-RestMethod -Uri "https://api.github.com/repos/dani-garcia/vaultwarden/releases/latest"
             $vaultwardenTag = $latestRelease.tag_name
             Write-Host "Latest release tag: $vaultwardenTag"
-          } elseif ("${{ github.event.inputs.tag_choice }}" -eq "custom") {
+          } elseif ($selectedTagChoice -eq "custom") {
             $vaultwardenTag = "${{ github.event.inputs.tag }}"
             Write-Host "Custom tag: $vaultwardenTag"
-          } elseif ("${{ github.event.inputs.tag_choice }}" -eq "latest") {
+          } elseif ($selectedTagChoice -eq "latest") {
             # 对于 latest，我们通常不指定 tag，让 checkout 获取最新 commit
             Write-Host "Using 'latest' tag choice, will checkout latest commit."
             # 当 tag_choice 是 latest 时，我们不设置 vaultwardenTag，checkout 会使用默认分支
           } else {
-            Write-Host "Unknown tag_choice, defaulting to main branch."
+            Write-Host "Unknown tag_choice: '$selectedTagChoice', defaulting to main branch."
           }
-          $outputFilePath = Join-Path $env:GITHUB_OUTPUT "github_output_file.txt"
-          "vaultwarden_tag=$vaultwardenTag" | Out-File -FilePath $outputFilePath -Append
-          "tag_choice=${{ github.event.inputs.tag_choice }}" | Out-File -FilePath $outputFilePath -Append
+
+          # *** 修正点：直接使用 echo >> GITHUB_OUTPUT ***
+          echo "vaultwarden_tag=$vaultwardenTag" >> $env:GITHUB_OUTPUT
+          echo "tag_choice=$selectedTagChoice" >> $env:GITHUB_OUTPUT
 
       - name: 克隆仓库
         uses: actions/checkout@v4
@@ -208,8 +212,8 @@ jobs:
           if ($versionMatch) {
               $version = $versionMatch.Matches.Groups[1].Value
               Write-Host "Detected Vaultwarden version: $version"
-              $outputFilePath = Join-Path $env:GITHUB_OUTPUT "github_output_file.txt"
-              "version=$version" | Out-File -FilePath $outputFilePath -Append
+              # *** 修正点：直接使用 echo >> GITHUB_OUTPUT ***
+              echo "version=$version" >> $env:GITHUB_OUTPUT
           } else {
               Write-Error "Could not detect Vaultwarden version from '$($vaultwardenExe -v)'"
               exit 1
