@@ -209,7 +209,8 @@ jobs:
             --release `
             --target ${{ matrix.target-triple }} `
             -Z build-std=std,panic_abort `
-            --target-dir ${{ env.CARGO_TARGET_DIR }} # Explicitly specify target-dir
+            --target-dir "${{ env.CARGO_TARGET_DIR }}" # Explicitly specify target-dir
+            
         working-directory: vaultwarden
 
       - name: List build output directories after build
