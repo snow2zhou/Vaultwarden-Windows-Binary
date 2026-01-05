@@ -21,11 +21,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        # 明确定义支持的操作系统
         os: [windows-latest]
-        # 明确定义支持的架构
         arch: [x86, x64]
-        # 定义 target-triple 和 vcpkg_arch 映射
         include:
           - arch: x86
             target-triple: i686-pc-windows-msvc
@@ -39,38 +36,37 @@ jobs:
       contents: write
 
     steps:
-      - name: 检查工具版本
+      - name: Check tool versions
         run: |
           git --version
           cargo --version
           vcpkg --version
 
-      - name: 安装Rust目标
+      - name: Install Rust targets
         run: |
           rustup target add ${{ matrix.target-triple }} --toolchain stable
           rustup target add ${{ matrix.target-triple }} --toolchain nightly
 
-      - name: 添加 nightly rust-src 组件
+      - name: Add nightly rust-src component
         run: rustup component add rust-src --toolchain nightly-x86_64-pc-windows-msvc
 
-      - name: 设置Rust工具链 (stable)
+      - name: Set up Rust toolchain (stable)
         uses: actions-rs/toolchain@v1
         with:
           profile: minimal
           target: ${{ matrix.target-triple }}
           toolchain: stable
 
-      - name: 设置Rust工具链 (nightly)
+      - name: Set up Rust toolchain (nightly)
         uses: actions-rs/toolchain@v1
         with:
           profile: minimal
           target: ${{ matrix.target-triple }}
           toolchain: nightly
 
-      - name: 配置vcpkg
+      - name: Configure vcpkg
         run: |
           vcpkg integrate install
-          # 根据 arch 动态选择 vcpkg 架构
           vcpkg install openssl:${{ matrix.vcpkg_arch }}
           vcpkg install libmariadb:${{ matrix.vcpkg_arch }}
           vcpkg install libpq:${{ matrix.vcpkg_arch }}
@@ -78,15 +74,15 @@ jobs:
           VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
           VCPKG_DEFAULT_TRIPLET: ${{ matrix.vcpkg_arch }}
 
-      - name: 缓存vcpkg
+      - name: Cache vcpkg
         uses: actions/cache@v4
         with:
           path: |
             %USERPROFILE%\vcpkg\installed
             %USERPROFILE%\vcpkg\buildtrees
-          key: ${{ runner.os }}-vcpkg-${{ matrix.arch }}-${{ hashFiles('**/vcpkg.json') }} # 考虑加入 vcpkg.json hash
+          key: ${{ runner.os }}-vcpkg-${{ matrix.arch }}-${{ hashFiles('**/vcpkg.json') }}
 
-      - name: 获取版本号
+      - name: Get version number
         id: get_tag
         run: |
           $vaultwardenTag = ""
@@ -108,19 +104,19 @@ jobs:
           echo "vaultwarden_tag=$vaultwardenTag" >> $env:GITHUB_OUTPUT
           echo "tag_choice=$selectedTagChoice" >> $env:GITHUB_OUTPUT
 
-      - name: 克隆仓库
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
           repository: dani-garcia/vaultwarden
           ref: ${{ steps.get_tag.outputs.vaultwarden_tag }}
           path: vaultwarden
 
-      - name: 切换版本 (如果选择了 'release' 或 'custom')
+      - name: Switch version (if 'release' or 'custom' chosen)
         if: ${{ steps.get_tag.outputs.vaultwarden_tag != '' && steps.get_tag.outputs.tag_choice != 'latest' }}
         run: git checkout ${{ steps.get_tag.outputs.vaultwarden_tag }}
         working-directory: vaultwarden
 
-      - name: 下载 web-vault
+      - name: Download web-vault
         run: |
           [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
           $release = Invoke-RestMethod -Uri "https://api.github.com/repos/dani-garcia/bw_web_builds/releases/latest"
@@ -148,9 +144,9 @@ jobs:
             New-Item -ItemType Directory -Path $outPath -Force
           }
           tar -xf $fileName -C $outPath --strip-components=1
-        working-directory: vaultwarden # Ensure this step runs within the vaultwarden directory
+        working-directory: vaultwarden
 
-      - name: 查找 libmariadb 版本
+      - name: Find libmariadb version
         id: get_mariadb_version
         run: |
           $vcpkgInstalledPath = "$env:USERPROFILE\vcpkg\installed"
@@ -177,8 +173,8 @@ jobs:
           }
 
           if (-not $version) {
-            Write-Warning "Could not automatically detect MariaDB version from include files. Trying to guess from package name or common paths. Setting to '3.1.11'."
-            $version = "3.1.11" # Fallback, but ideally this should be auto-detected
+            Write-Warning "Could not automatically detect MariaDB version from include files. Setting to '3.1.11'."
+            $version = "3.1.11"
           }
 
           if (-not $version) {
@@ -188,10 +184,8 @@ jobs:
 
           Write-Host "Detected MariaDB version: $version"
           echo "mariadb_version=$version" >> $env:GITHUB_OUTPUT
-        # This step needs to run within the vaultwarden directory to potentially find headers if vcpkg installed them there relative to project
-        # However, vcpkg installs globally, so the current path is likely fine.
 
-      - name: 编译项目 (使用 nightly)
+      - name: Build project (using nightly)
         run: |
           $targetDirName = "target/nightly-${{ matrix.target-triple }}"
           $env:CARGO_TARGET_DIR = $targetDirName
@@ -207,7 +201,6 @@ jobs:
           if (-not (Test-Path $env:MYSQLCLIENT_LIB_DIR)) { Write-Warning "MySQLClient lib dir not found: $env:MYSQLCLIENT_LIB_DIR" }
           if (-not (Test-Path $env:MYSQLCLIENT_INCLUDE_DIR)) { Write-Warning "MySQLClient include dir not found: $env:MYSQLCLIENT_INCLUDE_DIR" }
           
-          # Set environment variables for cargo
           $env:MYSQLCLIENT_VERSION = "${{ steps.get_mariadb_version.outputs.mariadb_version }}"
           $env:CARGO_HTTP_RETRY = "5"
 
@@ -215,16 +208,34 @@ jobs:
             --features "sqlite,mysql,postgresql" `
             --release `
             --target ${{ matrix.target-triple }} `
-            -Z build-std=std,panic_abort
+            -Z build-std=std,panic_abort `
+            --target-dir ${{ env.CARGO_TARGET_DIR }} # Explicitly specify target-dir
         working-directory: vaultwarden
 
-      - name: 移动编译产物
+      - name: List build output directories after build
+        run: |
+          Write-Host "Listing contents of vaultwarden/target/ for target ${{ matrix.target-triple }}:"
+          Get-ChildItem -Path "vaultwarden/target/" -Recurse -ErrorAction SilentlyContinue | Select-Object FullName
+          Write-Host "----------------------------------------"
+          Write-Host "Listing contents of vaultwarden/target/nightly-${{ matrix.target-triple }}/release/:"
+          Get-ChildItem -Path "vaultwarden/target/nightly-${{ matrix.target-triple }}/release/" -ErrorAction SilentlyContinue
+        working-directory: vaultwarden # Run from the vaultwarden directory
+
+      - name: Move compiled artifact
         run: |
           $sourceExePath = "vaultwarden/target/nightly-${{ matrix.target-triple }}/release/vaultwarden.exe"
           $destinationExeName = "vaultwarden-${{ matrix.arch }}.exe"
+          
+          # Verify the executable exists before trying to move it
+          if (-not (Test-Path $sourceExePath)) {
+              Write-Error "Executable not found at expected path: $sourceExePath"
+              exit 1 # Exit with error if not found
+          }
+          
           Move-Item -Path $sourceExePath -Destination "./$destinationExeName"
+        working-directory: vaultwarden # Ensure we are in the vaultwarden dir to move from its target subdir
 
-      - name: 版本检测
+      - name: Version detection
         id: version
         run: |
           $vaultwardenExe = "./vaultwarden-${{ matrix.arch }}.exe"
@@ -243,16 +254,13 @@ jobs:
               exit 1
           }
 
-      - name: 打包分发
+      - name: Package distribution
         run: |
           $packageName = "vaultwarden-${{ matrix.arch }}-${{ steps.version.outputs.version }}.zip"
           $filesToPackage = @(
               "./vaultwarden-${{ matrix.arch }}.exe",
               "./web-vault"
-              # You might want to include the .env.template if it's relevant for users
-              # "./.env.template" 
           )
-          # Check if files exist before packaging
           foreach ($file in $filesToPackage) {
               if (-not (Test-Path $file)) {
                   Write-Warning "File/Directory not found for packaging: $file"
@@ -260,7 +268,7 @@ jobs:
           }
           Compress-Archive -Path $filesToPackage -DestinationPath $packageName -Force
 
-      - name: 创建Release (仅在 tag_choice 不是 'latest' 时)
+      - name: Create Release (only if tag_choice is not 'latest')
         if: ${{ github.event.inputs.tag_choice != 'latest' }}
         uses: softprops/action-gh-release@v2
         with:
