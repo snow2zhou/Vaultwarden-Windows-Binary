@@ -101,6 +101,7 @@ jobs:
             Write-Host "Unknown tag_choice, defaulting to main branch."
           }
           # 使用 PowerShell 的 Join-Path 来构造 GITHUB_OUTPUT 路径
+          # YAML 标签 `|` 用于 PowerShell 的多行字符串，需要注意缩进
           $outputFilePath = Join-Path $env:GITHUB_OUTPUT "github_output_file.txt"
           "vaultwarden_tag=$vaultwardenTag" | Out-File -FilePath $outputFilePath -Append
           "tag_choice=${{ github.event.inputs.tag_choice }}" | Out-File -FilePath $outputFilePath -Append
@@ -163,9 +164,11 @@ jobs:
           $env:RUSTFLAGS = "-C target-feature=+crt-static -Clinker=lld-link"
           if ("${{ matrix.target-triple }}" -eq "i686-pc-windows-msvc") {
             # 32位链接器可能需要特殊处理
-            $env:CARGO_TARGET_I686_PC_WINDOWS_MSVC_LINKER = "link.exe" # 或者 lld-link
+            # $env:CARGO_TARGET_I686_PC_WINDOWS_MSVC_LINKER = "link.exe" # 或者 lld-link
+            # 默认情况下，Cargo 应该能找到 lld-link.exe 或者 link.exe
           } elseif ("${{ matrix.target-triple }}" -eq "x86_64-pc-windows-msvc") {
-            $env:CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER = "lld-link.exe" # 64位通常用 lld-link
+            # $env:CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER = "lld-link.exe"
+            # 默认情况下，Cargo 应该能找到 lld-link.exe
           }
 
           # 动态设置数据库库路径
@@ -196,6 +199,8 @@ jobs:
 
       - name: 版本检测
         id: version
+        # 关键修改：这里使用 `|` 符号来指示 PowerShell 命令的输出应该被视为多行字符串
+        # 并且确保 PowerShell 的管道符 `|` 不会被 YAML 解析为多行字符串的指示符
         run: |
           $vaultwardenExe = "./vaultwarden-${{ matrix.arch }}.exe"
           # 检查 vaultwarden.exe 是否存在
@@ -203,11 +208,14 @@ jobs:
               Write-Error "Vaultwarden executable not found at $vaultwardenExe"
               exit 1
           }
+          # 使用 & 来执行命令，并捕获输出
           $versionOutput = & $vaultwardenExe -v
+          # 使用 Select-String 来匹配版本号
           $versionMatch = $versionOutput | Select-String -Pattern "Vaultwarden (\d+\.\d+\.\d+)"
           if ($versionMatch) {
               $version = $versionMatch.Matches.Groups[1].Value
               Write-Host "Detected Vaultwarden version: $version"
+              # 将版本号写入 GITHUB_OUTPUT
               $outputFilePath = Join-Path $env:GITHUB_OUTPUT "github_output_file.txt"
               "version=$version" | Out-File -FilePath $outputFilePath -Append
           } else {
