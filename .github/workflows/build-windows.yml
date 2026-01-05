@@ -192,7 +192,7 @@ jobs:
             --features "sqlite,mysql,postgresql" `
             --release `
             --target ${{ matrix.target-triple }} `
-            -Z build-std=std,panic=abort
+            -Z build-std=std,panic_abort
 
         working-directory: vaultwarden
 
