@@ -68,10 +68,45 @@ jobs:
       - name: 下载 web-vault
         run: |
           $Release = Invoke-RestMethod -Uri "https://api.github.com/repos/dani-garcia/bw_web_builds/releases/latest"
-          $Asset = $Release.assets | Where-Object { $_.name -like "web-vault-*.tar.gz" }
+          $Asset = $Release.assets | Where-Object {
+              ($_.name -like "web-vault-*.tar.gz") -or 
+              ($_.name -match "^web-vault-v\d+\.\d+\.\d+\.tar\.gz$")
+          }
 
-          Invoke-WebRequest -Uri $Asset.browser_download_url -OutFile web-vault.tar.gz
-          tar -xf web-vault.tar.gz -C web-vault --strip-components=1
+          if (-not $Asset) {
+              Write-Error "❌ 未找到符合条件的web-vault资产，请检查以下可能原因："
+              Write-Error "1. 官方Release命名规范已变更（当前正则表达式匹配格式：web-vault-vX.Y.Z.tar.gz)"
+              Write-Error "2. GitHub API返回错误：$($Release.message)"
+              exit 1
+          }
+
+          if (-not $Asset.browser_download_url) {
+              Write-Error "🔍 资产下载链接不存在，可能原因："
+              Write-Error "- GitHub API返回格式变化（当前获取路径：.assets[].browser_download_url)"
+              Write-Error "- 资产ID $($Asset.id) 未包含正确下载链接"
+              exit 1
+          }              
+
+          [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+          try {
+            Invoke-WebRequest -Uri $Asset.browser_download_url -OutFile web-vault.tar.gz -UseBasicParsing -ErrorAction Stop
+          }catch{
+            Write-Error "💥 下载失败，技术细节：$($_.Exception.Message)"
+            exit 1
+          }
+
+          if (-not (Test-Path web-vault.tar.gz)) {
+             Write-Error "📁 压缩包未成功下载"
+             exit 1
+            }
+
+          try{
+            tar -xf web-vault.tar.gz -C web-vault --strip-components=1
+          }catch{
+            Write-Error "📂 解压失败，可能原因：文件损坏或权限问题"
+            exit 1
+          }
 
       - name: 配置vcpkg
         run: |
