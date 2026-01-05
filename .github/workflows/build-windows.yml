@@ -100,8 +100,6 @@ jobs:
           } else {
             Write-Host "Unknown tag_choice, defaulting to main branch."
           }
-          # 使用 PowerShell 的 Join-Path 来构造 GITHUB_OUTPUT 路径
-          # YAML 标签 `|` 用于 PowerShell 的多行字符串，需要注意缩进
           $outputFilePath = Join-Path $env:GITHUB_OUTPUT "github_output_file.txt"
           "vaultwarden_tag=$vaultwardenTag" | Out-File -FilePath $outputFilePath -Append
           "tag_choice=${{ github.event.inputs.tag_choice }}" | Out-File -FilePath $outputFilePath -Append
@@ -162,14 +160,11 @@ jobs:
 
           # 动态设置 linker
           $env:RUSTFLAGS = "-C target-feature=+crt-static -Clinker=lld-link"
-          if ("${{ matrix.target-triple }}" -eq "i686-pc-windows-msvc") {
-            # 32位链接器可能需要特殊处理
-            # $env:CARGO_TARGET_I686_PC_WINDOWS_MSVC_LINKER = "link.exe" # 或者 lld-link
-            # 默认情况下，Cargo 应该能找到 lld-link.exe 或者 link.exe
-          } elseif ("${{ matrix.target-triple }}" -eq "x86_64-pc-windows-msvc") {
-            # $env:CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER = "lld-link.exe"
-            # 默认情况下，Cargo 应该能找到 lld-link.exe
-          }
+          # cargo +nightly build --target ${{ matrix.target-triple }} 应该能自动找到链接器
+          # 如果遇到链接器问题，可以尝试显式指定
+          # if ("${{ matrix.target-triple }}" -eq "i686-pc-windows-msvc") { $env:CARGO_TARGET_I686_PC_WINDOWS_MSVC_LINKER = "link.exe" }
+          # if ("${{ matrix.target-triple }}" -eq "x86_64-pc-windows-msvc") { $env:CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER = "lld-link.exe" }
+
 
           # 动态设置数据库库路径
           $vcpkgInstalledPath = "$env:USERPROFILE\vcpkg\installed"
@@ -199,18 +194,18 @@ jobs:
 
       - name: 版本检测
         id: version
-        # 关键修改：这里使用 `|` 符号来指示 PowerShell 命令的输出应该被视为多行字符串
-        # 并且确保 PowerShell 的管道符 `|` 不会被 YAML 解析为多行字符串的指示符
+        # 关键修改：这里我们将 PowerShell 命令拆分成多行，并使用 ' ' 包装，避免 `|` 符号被 YAML 解析
+        # 并且确保 PowerShell 命令本身中的 `|` 管道符被正确执行
         run: |
           $vaultwardenExe = "./vaultwarden-${{ matrix.arch }}.exe"
-          # 检查 vaultwarden.exe 是否存在
           if (-not (Test-Path $vaultwardenExe)) {
               Write-Error "Vaultwarden executable not found at $vaultwardenExe"
               exit 1
           }
-          # 使用 & 来执行命令，并捕获输出
-          $versionOutput = & $vaultwardenExe -v
+          # 使用 . operator 来执行 PowerShell 命令并捕获输出
+          $versionOutput = . $vaultwardenExe -v
           # 使用 Select-String 来匹配版本号
+          # 请注意，PowerShell 的管道符 '|' 在这里是命令本身的一部分，不会被 YAML 解析
           $versionMatch = $versionOutput | Select-String -Pattern "Vaultwarden (\d+\.\d+\.\d+)"
           if ($versionMatch) {
               $version = $versionMatch.Matches.Groups[1].Value
