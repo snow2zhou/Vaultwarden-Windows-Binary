@@ -161,6 +161,47 @@ jobs:
           # 使用 tar 命令，确保其可用
           tar -xf $fileName -C $outPath --strip-components=1
 
+      - name: 查找 libmariadb 版本
+        id: get_mariadb_version
+        run: |
+          $vcpkgInstalledPath = "$env:USERPROFILE\vcpkg\installed"
+          $mariadbPath = Join-Path $vcpkgInstalledPath "${{ matrix.vcpkg_arch }}"
+          $libDir = Join-Path $mariadbPath "lib"
+          $includeDir = Join-Path $mariadbPath "include\mysql\mariadb"
+          $version = ""
+          
+          if (Test-Path $includeDir) {
+            $headerFiles = Get-ChildItem -Path $includeDir -Filter "*mysql.h"
+            foreach ($file in $headerFiles) {
+              $content = Get-Content $file.FullName
+              $versionMatch = $content | Select-String -Pattern 'MARIADB_VERSION\s+"(\d+\.\d+(\.\d+)?)"'
+              if ($versionMatch) {
+                $version = $versionMatch.Matches.Groups[1].Value
+                break
+              }
+
+              $versionMatch = $content | Select-String -Pattern 'LIBMYSQL_VERSION\s+"(\d+\.\d+(\.\d+)?)"'
+              if ($versionMatch) {
+                $version = $versionMatch.Matches.Groups[1].Value
+                break
+              }
+            }
+          }
+
+          if (-not $version) {
+            Write-Warning "Could not automatically detect MariaDB version from include files. Trying to guess from package name or common paths."
+            # 如果自动检测失败，可以尝试设置一个默认值，但这不推荐
+            $version = "3.1.11"
+          }
+
+          if (-not $version) {
+            Write-Error "❌ Failed to detect MariaDB version. Please manually set MYSQLCLIENT_VERSION or ensure MariaDB is installed correctly by vcpkg."
+            exit 1
+          }
+
+          Write-Host "Detected MariaDB version: $version"
+          echo "mariadb_version=$version" >> $env:GITHUB_OUTPUT
+
       - name: 编译项目 (使用 nightly)
         run: |
           # 动态生成 target directory
@@ -192,7 +233,10 @@ jobs:
             --features "sqlite,mysql,postgresql" `
             --release `
             --target ${{ matrix.target-triple }} `
-            -Z build-std=std,panic_abort
+            -Z build-std=std,panic_abort `
+            env:
+              MYSQLCLIENT_VERSION: ${{ steps.get_mariadb_version.outputs.mariadb_version }}
+              CARGO_HTTP_RETRY: 5 # 增加 HTTP 重试次数，防止网络瞬断导致 cargo 失败
 
         working-directory: vaultwarden
 
