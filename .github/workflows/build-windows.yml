@@ -21,11 +21,10 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        # 明确定义支持的操作系统
         os: [windows-latest]
-        # 明确定义支持的架构
         arch: [x86, x64]
-        # 定义 target-triple 和 vcpkg_arch 映射
+        target-triple: [i686-pc-windows-msvc, x86_64-pc-windows-msvc]
+        vcpkg_arch: [x86-windows-static, x64-windows-static]
         include:
           - arch: x86
             target-triple: i686-pc-windows-msvc
@@ -40,34 +39,100 @@ jobs:
 
     steps:
       - name: 检查工具版本
-        run: |
-          git --version
-          cargo --version
-          vcpkg --version
+        run: git version && cargo version && vcpkg version
 
       - name: 安装Rust目标
         run: |
+          rustup target add ${{ matrix.target-triple }}
           rustup target add ${{ matrix.target-triple }} --toolchain stable
-          rustup target add ${{ matrix.target-triple }} --toolchain nightly
 
-      - name: 设置Rust工具链 (stable)
+      - name: 设置Rust工具链
         uses: actions-rs/toolchain@v1
         with:
           profile: minimal
           target: ${{ matrix.target-triple }}
           toolchain: stable
 
-      - name: 设置Rust工具链 (nightly)
-        uses: actions-rs/toolchain@v1
+      - name: 安装交叉编译目标
+        run: |
+          rustup target add ${{ matrix.target-triple }} || (
+            echo "开始回退安装方式..." &&
+            rustup toolchain install stable-${{ matrix.target-triple }} &&
+            rustup component add rust-std-${{ matrix.target-triple }}
+          )
+        env:
+          VCPKGRS_TRIPLET: ${{ matrix.vcpkg_arch }}
+          CARGO_TARGET_I686_PC_WINDOWS_MSVC_LINKER: lld-link
+
+      - name: 获取版本号
+        id: get_tag
+        run: |
+          if ("${{ github.event.inputs.tag_choice }}" -eq "release") {
+            $release = Invoke-RestMethod -Uri "https://api.github.com/repos/dani-garcia/vaultwarden/releases/latest"
+            echo "tag=$($release.tag_name)" >> $env:GITHUB_OUTPUT
+          } elseif ("${{ github.event.inputs.tag_choice }}" -eq "custom") {
+            echo "tag=${{ github.event.inputs.tag }}" >> $env:GITHUB_OUTPUT
+          } else {
+            echo "tag=" >> $env:GITHUB_OUTPUT
+          }
+
+      - name: 克隆仓库
+        uses: actions/checkout@v4
         with:
-          profile: minimal
-          target: ${{ matrix.target-triple }}
-          toolchain: nightly
+          repository: dani-garcia/vaultwarden
+          ref: ${{ steps.get_tag.outputs.tag || 'main' }}
+          path: vaultwarden
+
+      - name: 切换版本
+        if: ${{ steps.get_tag.outputs.tag != '' }}
+        run: git checkout ${{ steps.get_tag.outputs.tag }}
+        working-directory: vaultwarden
+
+      - name: 下载 web-vault
+        run: |
+          $Release = Invoke-RestMethod -Uri "https://api.github.com/repos/dani-garcia/bw_web_builds/releases/latest"
+          $Asset = $Release.assets | Where-Object {
+              ($_.name -like "web-vault-*.tar.gz") -or 
+              ($_.name -match "^web-vault-v\d+\.\d+\.\d+\.tar\.gz$") -or
+              ($_.name -like "*web*.tar.gz") -or
+              ($_.name -like "*.tar.gz")
+          }
+
+          if (-not $Asset) {
+              Write-Error "❌ 未找到符合条件的web-vault资产，请检查以下可能原因："
+              Write-Error "1. 官方Release命名规范已变更（当前正则表达式匹配格式：web-vault-vX.Y.Z.tar.gz)"
+              Write-Error "2. GitHub API返回错误：$($Release.message)"
+              exit 1
+          }
+
+          if (-not $Asset.browser_download_url) {
+              Write-Error "🔍 资产下载链接不存在，可能原因："
+              Write-Error "- GitHub API返回格式变化（当前获取路径：.assets[].browser_download_url)"
+              Write-Error "- 资产ID $($Asset.id) 未包含正确下载链接"
+              exit 1
+          }              
+
+          [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+          try {
+            $DownloadUrl = $Asset.browser_download_url
+            $FileName = $Asset.name
+            $OutPath = "web-vault"
+            Write-Host "Downloading $FileName..."
+            Invoke-WebRequest -Uri $DownloadUrl -OutFile $FileName
+            Write-Host "Extracting..."
+            if (-not (Test-Path -Path $OutPath)) {
+              New-Item -ItemType Directory -Path $OutPath
+            }
+            tar -xf $FileName -C $OutPath --strip-components=1
+          }catch{
+            Write-Error "💥 下载失败，技术细节：$($_.Exception.Message)"
+            exit 1
+          }
 
       - name: 配置vcpkg
         run: |
           vcpkg integrate install
-          # 根据 arch 动态选择 vcpkg 架构
           vcpkg install openssl:${{ matrix.vcpkg_arch }}
           vcpkg install libmariadb:${{ matrix.vcpkg_arch }}
           vcpkg install libpq:${{ matrix.vcpkg_arch }}
@@ -79,170 +144,55 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            %USERPROFILE%\vcpkg\installed
-            %USERPROFILE%\vcpkg\buildtrees
-          key: ${{ runner.os }}-vcpkg-${{ matrix.arch }}-${{ hashFiles('**/vcpkg.json') }} # 考虑加入 vcpkg.json hash
+            ~/vcpkg/installed
+            ~/vcpkg/buildtrees
+          key: ${{ runner.os }}-vcpkg-${{ matrix.arch }}-${{ hashFiles('**/vcpkg.json') }}
 
-      - name: 获取版本号
-        id: get_tag
+      - name: 添加编译目标
+        run: rustup target add ${{ matrix.target-triple }}
+
+      - name: 设置nightly工具链
         run: |
-          $vaultwardenTag = ""
-          if ("${{ github.event.inputs.tag_choice }}" -eq "release") {
-            $latestRelease = Invoke-RestMethod -Uri "https://api.github.com/repos/dani-garcia/vaultwarden/releases/latest"
-            $vaultwardenTag = $latestRelease.tag_name
-            Write-Host "Latest release tag: $vaultwardenTag"
-          } elseif ("${{ github.event.inputs.tag_choice }}" -eq "custom") {
-            $vaultwardenTag = "${{ github.event.inputs.tag }}"
-            Write-Host "Custom tag: $vaultwardenTag"
-          } elseif ("${{ github.event.inputs.tag_choice }}" -eq "latest") {
-            # 对于 latest，我们通常不指定 tag，让 checkout 获取最新 commit
-            Write-Host "Using 'latest' tag choice, will checkout latest commit."
-          } else {
-            Write-Host "Unknown tag_choice, defaulting to main branch."
-          }
-          # 使用 PowerShell 的 Join-Path 来构造 GITHUB_OUTPUT 路径
-          $outputFilePath = Join-Path $env:GITHUB_OUTPUT "github_output_file.txt"
-          "vaultwarden_tag=$vaultwardenTag" | Out-File -FilePath $outputFilePath -Append
-          "tag_choice=${{ github.event.inputs.tag_choice }}" | Out-File -FilePath $outputFilePath -Append
+          rustup toolchain install nightly
+          rustup default nightly
+          rustup target add i686-pc-windows-msvc --toolchain nightly
 
-      - name: 克隆仓库
-        uses: actions/checkout@v4
-        with:
-          repository: dani-garcia/vaultwarden
-          # 根据 tag_choice 和 vaultwarden_tag 来决定 ref
-          ref: ${{ steps.get_tag.outputs.vaultwarden_tag || (steps.get_tag.outputs.tag_choice == 'latest' ? '' : 'main') }}
-          path: vaultwarden
-
-      - name: 切换版本 (如果不是 latest 或 main)
-        # 仅当指定了 custom tag 或 release tag 时才执行 checkout
-        if: ${{ steps.get_tag.outputs.vaultwarden_tag != '' && steps.get_tag.outputs.tag_choice != 'latest' }}
-        run: git checkout ${{ steps.get_tag.outputs.vaultwarden_tag }}
-        working-directory: vaultwarden
-
-      - name: 下载 web-vault
-        run: |
-          # 确保使用 Tls12
-          [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-
-          $release = Invoke-RestMethod -Uri "https://api.github.com/repos/dani-garcia/bw_web_builds/releases/latest"
-          # 尝试更通用的匹配方式，同时保留原有的逻辑
-          $asset = $release.assets | Where-Object {
-              ($_.name -match "^web-vault-v\d+\.\d+\.\d+\.tar\.gz$") -or
-              ($_.name -like "web-vault-*.tar.gz") -or
-              ($_.name -like "*web*.tar.gz") -or
-              ($_.name -like "*.tar.gz") # 最后尝试更宽泛的匹配
-          } | Select-Object -First 1 # 确保只选择一个匹配项
-
-          if (-not $asset) {
-              Write-Error "❌ 未找到符合条件的web-vault资产。请检查官方Release命名规范是否已变更。"
-              exit 1
-          }
-
-          $downloadUrl = $asset.browser_download_url
-          $fileName = $asset.name
-          $outPath = "web-vault"
-
-          Write-Host "Downloading $fileName from $downloadUrl..."
-          Invoke-WebRequest -Uri $downloadUrl -OutFile $fileName
-
-          Write-Host "Extracting $fileName to $outPath..."
-          if (-not (Test-Path -Path $outPath)) {
-            New-Item -ItemType Directory -Path $outPath -Force
-          }
-          # 使用 tar 命令，确保其可用
-          tar -xf $fileName -C $outPath --strip-components=1
-
-      - name: 编译项目 (使用 nightly)
-        run: |
-          # 动态生成 target directory
-          $targetDirName = "target/nightly-${{ matrix.target-triple }}"
-          # 动态设置 Cargo 环境变量
-          $env:CARGO_TARGET_DIR = $targetDirName
-
-          # 动态设置 linker
-          $env:RUSTFLAGS = "-C target-feature=+crt-static -Clinker=lld-link"
-          if ("${{ matrix.target-triple }}" -eq "i686-pc-windows-msvc") {
-            # 32位链接器可能需要特殊处理
-            $env:CARGO_TARGET_I686_PC_WINDOWS_MSVC_LINKER = "link.exe" # 或者 lld-link
-          } elseif ("${{ matrix.target-triple }}" -eq "x86_64-pc-windows-msvc") {
-            $env:CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER = "lld-link.exe" # 64位通常用 lld-link
-          }
-
-          # 动态设置数据库库路径
-          $vcpkgInstalledPath = "$env:USERPROFILE\vcpkg\installed"
-          $env:POSTGRESQL_LIB_DIR = Join-Path $vcpkgInstalledPath "${{ matrix.vcpkg_arch }}\lib"
-          $env:MYSQLCLIENT_LIB_DIR = Join-Path $vcpkgInstalledPath "${{ matrix.vcpkg_arch }}\lib"
-          $env:MYSQLCLIENT_INCLUDE_DIR = Join-Path $vcpkgInstalledPath "${{ matrix.vcpkg_arch }}\include\mysql\mariadb"
-
-          # 检查所需的数据库库是否存在
-          if (-not (Test-Path $env:POSTGRESQL_LIB_DIR)) { Write-Warning "PostgreSQL lib dir not found: $env:POSTGRESQL_LIB_DIR" }
-          if (-not (Test-Path $env:MYSQLCLIENT_LIB_DIR)) { Write-Warning "MySQLClient lib dir not found: $env:MYSQLCLIENT_LIB_DIR" }
-          if (-not (Test-Path $env:MYSQLCLIENT_INCLUDE_DIR)) { Write-Warning "MySQLClient include dir not found: $env:MYSQLCLIENT_INCLUDE_DIR" }
-
-
+      - name: 编译项目
+        run: 
           cargo +nightly build `
             --features "sqlite,mysql,postgresql" `
             --release `
             --target ${{ matrix.target-triple }} `
             -Z build-std=std,panic=abort
-
         working-directory: vaultwarden
+        env:
+          RUSTFLAGS: "-Ctarget-feature=+crt-static -Clinker=lld-link"
+          CARGO_TARGET_DIR: "target/nightly-${{ matrix.target-triple }}"
+          POSTGRESQL_LIB_DIR: "${{ github.workspace }}/vcpkg/installed/${{ matrix.vcpkg_arch }}/lib"
+          MYSQLCLIENT_LIB_DIR: "${{ github.workspace }}/vcpkg/installed/${{ matrix.vcpkg_arch }}/lib"
+          MYSQLCLIENT_INCLUDE_DIR: "${{ github.workspace }}/vcpkg/installed/${{ matrix.vcpkg_arch }}/include/mysql/mariadb"
 
-      - name: 移动编译产物
+      - name: 移动文件
         run: |
-          $sourceExePath = "vaultwarden/target/nightly-${{ matrix.target-triple }}/release/vaultwarden.exe"
-          $destinationExeName = "vaultwarden-${{ matrix.arch }}.exe"
-          Move-Item -Path $sourceExePath -Destination "./$destinationExeName"
+          $targetDir = "vaultwarden/target/${{ matrix.target-triple }}/release"
+          Move-Item -Path "$targetDir/vaultwarden.exe" -Destination "./vaultwarden-${{ matrix.arch }}.exe"
 
       - name: 版本检测
         id: version
         run: |
-          $vaultwardenExe = "./vaultwarden-${{ matrix.arch }}.exe"
-          # 检查 vaultwarden.exe 是否存在
-          if (-not (Test-Path $vaultwardenExe)) {
-              Write-Error "Vaultwarden executable not found at $vaultwardenExe"
-              exit 1
-          }
-          $versionOutput = & $vaultwardenExe -v
-          $versionMatch = $versionOutput | Select-String -Pattern "Vaultwarden (\d+\.\d+\.\d+)"
-          if ($versionMatch) {
-              $version = $versionMatch.Matches.Groups[1].Value
-              Write-Host "Detected Vaultwarden version: $version"
-              $outputFilePath = Join-Path $env:GITHUB_OUTPUT "github_output_file.txt"
-              "version=$version" | Out-File -FilePath $outputFilePath -Append
-          } else {
-              Write-Error "Could not detect Vaultwarden version from '$($vaultwardenExe -v)'"
-              exit 1
-          }
+          $version = .\vaultwarden-${{ matrix.arch }}.exe -v | Select-String -Pattern "Vaultwarden (\d+\.\d+\.\d+)"
+          echo "version=$($version.Matches.Groups.Value)" >> $env:GITHUB_OUTPUT
 
       - name: 打包分发
         run: |
           $packageName = "vaultwarden-${{ matrix.arch }}-${{ steps.version.outputs.version }}.zip"
-          $filesToPackage = @(
-              "./vaultwarden-${{ matrix.arch }}.exe",
-              "./web-vault",
-              "./.env.template"
-          )
-          # 检查待打包文件是否存在
-          foreach ($file in $filesToPackage) {
-              if (-not (Test-Path $file)) {
-                  Write-Warning "File/Directory not found for packaging: $file"
-              }
-          }
-          Compress-Archive -Path $filesToPackage -DestinationPath $packageName -Force
+          Compress-Archive -Path "vaultwarden-${{ matrix.arch }}.exe", "web-vault", ".env.template" -DestinationPath $packageName
 
-      - name: 创建Release (仅在 tag_choice 不是 'latest' 时)
-        # 仅当 tag_choice 不是 latest 时创建 release
+      - name: 创建Release
         if: ${{ github.event.inputs.tag_choice != 'latest' }}
         uses: softprops/action-gh-release@v2
         with:
-          # 使用通配符来匹配所有打包的 zip 文件
           files: |
             vaultwarden-*-${{ steps.version.outputs.version }}.zip
-          # Release tag 格式调整，使用 detected version
-          tag_name: v${{ steps.version.outputs.version }}
-          name: "Vaultwarden ${{ steps.version.outputs.version }} (Windows Builds)"
-          # 可以在此添加 body 来描述 release，例如从 changelog 获取
-          # body: |
-          #   See changelog for details.
-          #   https://github.com/dani-garcia/vaultwarden/releases/tag/v${{ steps.version.outputs.version }}
+          tag_name: v${{ steps.version.outputs.version }}-${{ matrix.arch }}
+          name: "Vaultwarden ${{ steps.version.outputs.version }} (${{ matrix.arch }})"
