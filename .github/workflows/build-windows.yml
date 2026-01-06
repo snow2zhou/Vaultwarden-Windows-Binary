@@ -224,16 +224,28 @@ jobs:
 
       - name: Move compiled artifact
         run: |
-          $sourceExePath = "vaultwarden/target/nightly-${{ matrix.target-triple }}/release/vaultwarden.exe"
+          $buildTargetDir = "${env:CARGO_TARGET_DIR}"
+          if (-not $buildTargetDir) {
+            Write-Error "CARGO_TARGET_DIR is not set. Cannot determine build output location."
+            exit 1
+          }
+          
+          $outputExePath = Join-Path -Path $buildTargetDir -ChildPath "nightly-${{ matrix.target-triple }}/release/vaultwarden.exe"
           $destinationExeName = "vaultwarden-${{ matrix.arch }}.exe"
           
           # Verify the executable exists before trying to move it
-          if (-not (Test-Path $sourceExePath)) {
-              Write-Error "Executable not found at expected path: $sourceExePath"
+          if (-not (Test-Path $outputExePath)) {
+              Write-Error "Executable not found at expected path: $outputExePath"
+              Write-Host "Contents of directory (if it exists):"
+              if (Test-Path (Split-Path $outputExePath -Parent)) {
+                Get-ChildItem (Split-Path $outputExePath -Parent) | Select-Object FullName, Length
+              } else {
+                Write-Host "Parent directory does not exist: $(Split-Path $outputExePath -Parent)"
+              }
               exit 1 # Exit with error if not found
           }
           
-          Move-Item -Path $sourceExePath -Destination "./$destinationExeName"
+          Move-Item -Path $outputExePath -Destination "./$destinationExeName"
         working-directory: vaultwarden # Ensure we are in the vaultwarden dir to move from its target subdir
 
       - name: Version detection
