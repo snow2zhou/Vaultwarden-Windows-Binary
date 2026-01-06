@@ -146,6 +146,15 @@ jobs:
           tar -xf $fileName -C $outPath --strip-components=1
         working-directory: vaultwarden
 
+      - name: Download .env.template
+        run: |
+          Invoke-WebRequest -Uri "https://raw.githubusercontent.com/dani-garcia/vaultwarden/main/.env.template" -OutFile .env.template
+          $tag = "${{ steps.get_tag.outputs.tag_choice }}"
+          if (-not $tag) { $tag = "main" }
+          $url = "https://raw.githubusercontent.com/dani-garcia/vaultwarden/$tag/.env.template"
+          Invoke-WebRequest -Uri $url -OutFile .env.template
+        working-directory: vaultwarden
+
       - name: Find libmariadb version
         id: get_mariadb_version
         run: |
@@ -187,9 +196,7 @@ jobs:
 
       - name: Build project (using nightly)
         run: |
-          $targetDirName = "target/nightly-${{ matrix.target-triple }}"
-          $env:CARGO_TARGET_DIR = $targetDirName
-
+          $targetDir = "target/nightly-${{ matrix.target-triple }}"
           $env:RUSTFLAGS = "-C target-feature=+crt-static -Clinker=lld-link"
 
           $vcpkgInstalledPath = "$env:USERPROFILE\vcpkg\installed"
@@ -209,43 +216,40 @@ jobs:
             --release `
             --target ${{ matrix.target-triple }} `
             -Z build-std=std,panic_abort `
-            --target-dir "${{ env.CARGO_TARGET_DIR }}" # Explicitly specify target-dir
+            --target-dir "$targetDir"
             
         working-directory: vaultwarden
 
-      - name: List build output directories after build
+      - name: Debug build output
         run: |
-          Write-Host "Listing contents of target/ for target ${{ matrix.target-triple }}:"
-          Get-ChildItem -Path "target/" -Recurse -ErrorAction SilentlyContinue | Select-Object FullName
-          Write-Host "----------------------------------------"
-          Write-Host "Listing contents of target/nightly-${{ matrix.target-triple }}/release/:"
-          Get-ChildItem -Path "target/nightly-${{ matrix.target-triple }}/release/" -ErrorAction SilentlyContinue
-        working-directory: vaultwarden # Run from the vaultwarden directory
+          Write-Host "Current directory: $(Get-Location)"
+          Write-Host "Looking for built executable..."
+        
+          # 检查构建是否成功
+          $exePath = "target/nightly-${{ matrix.target-triple }}/release/vaultwarden.exe"
+          if (Test-Path $exePath) {
+            Write-Host "✓ Build successful! Found at: $exePath"
+            Write-Host "File size: $((Get-Item $exePath).Length) bytes"
+          } else {
+            Write-Error "Build failed or executable not found"
+            Write-Host "Contents of target directory:"
+            Get-ChildItem -Path "target" -Recurse -ErrorAction SilentlyContinue | Select-Object FullName
+          }
+        working-directory: vaultwarden
 
       - name: Move compiled artifact
         run: |
-          $buildTargetDir = "${env:CARGO_TARGET_DIR}"
-          if (-not $buildTargetDir) {
-            Write-Error "CARGO_TARGET_DIR is not set. Cannot determine build output location."
-            exit 1
-          }
-          
-          $outputExePath = Join-Path -Path $buildTargetDir -ChildPath "nightly-${{ matrix.target-triple }}/release/vaultwarden.exe"
+          $sourceExePath = "target/nightly-${{ matrix.target-triple }}/release/vaultwarden.exe"
           $destinationExeName = "vaultwarden-${{ matrix.arch }}.exe"
           
           # Verify the executable exists before trying to move it
-          if (-not (Test-Path $outputExePath)) {
-              Write-Error "Executable not found at expected path: $outputExePath"
-              Write-Host "Contents of directory (if it exists):"
-              if (Test-Path (Split-Path $outputExePath -Parent)) {
-                Get-ChildItem (Split-Path $outputExePath -Parent) | Select-Object FullName, Length
-              } else {
-                Write-Host "Parent directory does not exist: $(Split-Path $outputExePath -Parent)"
-              }
+          if (-not (Test-Path $sourceExePath)) {
+              Write-Error "Executable not found at: $sourceExePath"
               exit 1 # Exit with error if not found
           }
           
-          Move-Item -Path $outputExePath -Destination "./$destinationExeName"
+          Move-Item -Path $sourceExePath -Destination "./$destinationExeName"
+          Write-Host "Moved to: $destinationExeName"
         working-directory: vaultwarden # Ensure we are in the vaultwarden dir to move from its target subdir
 
       - name: Version detection
@@ -272,7 +276,8 @@ jobs:
           $packageName = "vaultwarden-${{ matrix.arch }}-${{ steps.version.outputs.version }}.zip"
           $filesToPackage = @(
               "./vaultwarden-${{ matrix.arch }}.exe",
-              "./web-vault"
+              "./web-vault",
+              "./.env.template"
           )
           foreach ($file in $filesToPackage) {
               if (-not (Test-Path $file)) {
