@@ -148,11 +148,28 @@ jobs:
 
       - name: Download .env.template
         run: |
-          Invoke-WebRequest -Uri "https://raw.githubusercontent.com/dani-garcia/vaultwarden/main/.env.template" -OutFile .env.template
-          $tag = "${{ steps.get_tag.outputs.tag_choice }}"
-          if (-not $tag) { $tag = "main" }
+          $tag = "${{ steps.get_tag.outputs.vaultwarden_tag }}"
+          if (-not $tag) {
+            $tag = "main"
+          }
           $url = "https://raw.githubusercontent.com/dani-garcia/vaultwarden/$tag/.env.template"
-          Invoke-WebRequest -Uri $url -OutFile .env.template
+          
+          try {
+            Invoke-WebRequest -Uri $url -OutFile .env.template -ErrorAction Stop
+            Write-Host "✓ Successfully downloaded .env.template"
+          } catch {
+             Write-Warning "Failed to download from $tag, trying main branch..."
+             $fallbackUrl = "https://raw.githubusercontent.com/dani-garcia/vaultwarden/main/.env.template"
+             Invoke-WebRequest -Uri $fallbackUrl -OutFile .env.template
+             Write-Host "✓ Downloaded .env.template from main branch (fallback)"
+          }
+          if (Test-Path .env.template) {
+            $fileSize = (Get-Item .env.template).Length
+            Write-Host "File downloaded successfully. Size: $fileSize bytes"
+          } else {
+            Write-Error "Failed to download .env.template"
+            exit 1
+          }
         working-directory: vaultwarden
 
       - name: Find libmariadb version
