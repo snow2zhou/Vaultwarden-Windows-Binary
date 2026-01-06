@@ -323,6 +323,7 @@ jobs:
         working-directory: vaultwarden
 
       - name: Package distribution
+        working-directory: vaultwarden
         run: |
           $packageName = "vaultwarden-${{ matrix.arch }}-${{ steps.version.outputs.version }}.zip"
           $filesToPackage = @(
