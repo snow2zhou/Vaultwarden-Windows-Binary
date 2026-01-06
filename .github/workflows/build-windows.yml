@@ -1,4 +1,4 @@
-name: Vaultwarden Windows Build (Full DB Support) - Multi-Arch
+name: Vaultwarden Windows Build (Multi-Arch)
 
 on:
   workflow_dispatch:
@@ -18,21 +18,18 @@ on:
 
 jobs:
   build:
-    strategy:
-      matrix:
-        arch: [x64, x86]
-        include:
-          - arch: x64
-            target: x86_64-pc-windows-msvc
-            vcpkg_triplet: x64-windows-static
-            rust_target: x86_64-pc-windows-msvc
-          - arch: x86
-            target: i686-pc-windows-msvc
-            vcpkg_triplet: x86-windows-static
-            rust_target: i686-pc-windows-msvc
     runs-on: windows-latest
     permissions:
       contents: write
+    strategy:
+      matrix:
+        include:
+          - target_arch: x64
+            vcpkg_triplet: x64-windows-static
+            rust_target: x86_64-pc-windows-msvc
+          - target_arch: x86
+            vcpkg_triplet: x86-windows-static
+            rust_target: i686-pc-windows-msvc
 
     steps:
       - name: 检查工具版本
@@ -91,9 +88,6 @@ jobs:
             core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
             core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
 
-      - name: 安装 Rust 目标
-        run: rustup target add ${{ matrix.rust_target }}
-
       - name: 使用vcpkg安装依赖
         run: |
           vcpkg integrate install
@@ -106,8 +100,8 @@ jobs:
       - name: 缓存vcpkg依赖
         uses: actions/cache@v4
         with:
-          path: ${{ github.workspace }}/vcpkg/installed
-          key: vcpkg-${{ matrix.arch }}-${{ hashFiles('**/vcpkg.json') }}
+          path: ${{ github.workspace }}/vcpkg/installed/${{ matrix.vcpkg_triplet }}
+          key: vcpkg-${{ matrix.vcpkg_triplet }}-${{ hashFiles('**/vcpkg.json') }}
 
       - name: 编译 vaultwarden
         run: cargo build --features "sqlite,mysql,postgresql" --release --target ${{ matrix.rust_target }}
@@ -120,50 +114,43 @@ jobs:
           MYSQLCLIENT_INCLUDE_DIR: "${{ github.workspace }}/vcpkg/installed/${{ matrix.vcpkg_triplet }}/include/mysql/mariadb"
 
       - name: 移动文件
-        run: |
-          mkdir -p artifacts/${{ matrix.arch }}
-          move .\vaultwarden\target\${{ matrix.rust_target }}\release\vaultwarden.exe .\artifacts\${{ matrix.arch }}\vaultwarden.exe
+        run: move .\vaultwarden\target\${{ matrix.rust_target }}\release\vaultwarden.exe .\vaultwarden-${{ matrix.target_arch }}.exe
 
       - name: 下载 .env.template
         run: |
           $tag = "${{ steps.get_tag.outputs.tag }}"
           if (-not $tag) { $tag = "main" }
           $url = "https://raw.githubusercontent.com/dani-garcia/vaultwarden/$tag/.env.template"
-          Invoke-WebRequest -Uri $url -OutFile .\artifacts\${{ matrix.arch }}\.env.template
+          Invoke-WebRequest -Uri $url -OutFile .env.template
 
       - name: 版本信息
         id: get_version
         run: |
-          $version_output = .\artifacts\${{ matrix.arch }}\vaultwarden.exe -v
+          $version_output = .\vaultwarden-${{ matrix.target_arch }}.exe -v
           $vaultwarden_version = ($version_output | Select-String -Pattern "(?i)Vaultwarden (\S+)").Matches.Groups[1].Value
           $web_vault_version = ($version_output | Select-String -Pattern "(?i)Web-Vault (\S+)").Matches.Groups[1].Value
 
           echo "vaultwarden_version=$vaultwarden_version" >> $env:GITHUB_OUTPUT
           echo "web_vault_version=$web_vault_version" >> $env:GITHUB_OUTPUT
 
-      - name: 打包文件
+      - name: 打包所有文件
         run: |
-          mkdir -p temp_package_${{ matrix.arch }}
-          copy .\artifacts\${{ matrix.arch }}\vaultwarden.exe temp_package_${{ matrix.arch }}
-          if (-not (Test-Path -Path .\web-vault)) {
-              Write-Error "Web-vault directory not found. Ensure the '下载 web-vault' step correctly extracts content into a 'web-vault' directory."
-              exit 1
-          }
-          xcopy /E /I web-vault temp_package_${{ matrix.arch }}\web-vault
-          copy .\artifacts\${{ matrix.arch }}\.env.template temp_package_${{ matrix.arch }}
-          tar -czvf vaultwarden-${{ matrix.arch }}-full-${{ steps.get_version.outputs.vaultwarden_version }}-web-${{ steps.get_version.outputs.web_vault_version }}.tar.gz -C temp_package_${{ matrix.arch }} .
+          mkdir temp_package
+          copy vaultwarden-${{ matrix.target_arch }}.exe temp_package\vaultwarden.exe
+          xcopy /E /I web-vault temp_package\web-vault
+          copy .env.template temp_package
+          tar -czvf vaultwarden-${{ matrix.target_arch }}-full-${{ steps.get_version.outputs.vaultwarden_version }}-web-${{ steps.get_version.outputs.web_vault_version }}.tar.gz -C temp_package .
 
       - name: 上传构建产物
         uses: actions/upload-artifact@v4
         with:
-          name: vaultwarden-${{ matrix.arch }}
+          name: vaultwarden-${{ matrix.target_arch }}-package
           path: |
-            vaultwarden-${{ matrix.arch }}-full-${{ steps.get_version.outputs.vaultwarden_version }}-web-${{ steps.get_version.outputs.web_vault_version }}.tar.gz
-          retention-days: 7
+            vaultwarden-${{ matrix.target_arch }}-full-*.tar.gz
+            .env.template
 
   release:
     needs: build
-    if: ${{ github.event.inputs.tag_choice == 'release' || github.event.inputs.tag_choice == 'custom' }}
     runs-on: windows-latest
     permissions:
       contents: write
@@ -171,55 +158,22 @@ jobs:
       - name: 下载所有构建产物
         uses: actions/download-artifact@v4
         with:
-          path: ./artifacts
-          pattern: vaultwarden-*
+          path: artifacts
+          pattern: vaultwarden-*-package
           merge-multiple: true
 
-      - name: 获取版本信息
-        id: get_version
-        run: |
-          # 从任意一个架构的可执行文件中获取版本信息
-          $arch = "x64"  # 使用 x64 版本获取版本信息
-          $exe_path = ".\artifacts\vaultwarden-$arch\vaultwarden.exe"
-          if (Test-Path $exe_path) {
-            $version_output = & $exe_path -v
-            $vaultwarden_version = ($version_output | Select-String -Pattern "(?i)Vaultwarden (\S+)").Matches.Groups[1].Value
-            $web_vault_version = ($version_output | Select-String -Pattern "(?i)Web-Vault (\S+)").Matches.Groups[1].Value
-            
-            echo "vaultwarden_version=$vaultwarden_version" >> $env:GITHUB_OUTPUT
-            echo "web_vault_version=$web_vault_version" >> $env:GITHUB_OUTPUT
-          } else {
-            echo "vaultwarden_version=unknown" >> $env:GITHUB_OUTPUT
-            echo "web_vault_version=unknown" >> $env:GITHUB_OUTPUT
-          }
-
       - name: 创建 GitHub Release
-        id: create_release
+        if: ${{ github.event.inputs.tag_choice == 'release' || github.event.inputs.tag_choice == 'custom' }}
         uses: softprops/action-gh-release@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           files: |
-            ./artifacts/vaultwarden-x64/vaultwarden-x64-full-*.tar.gz
-            ./artifacts/vaultwarden-x86/vaultwarden-x86-full-*.tar.gz
-          tag_name: v${{ steps.get_version.outputs.vaultwarden_version }}-web-${{ steps.get_version.outputs.web_vault_version }}
-          release_name: "v${{ steps.get_version.outputs.vaultwarden_version }}-web-${{ steps.get_version.outputs.web_vault_version }}"
+            artifacts/**/*.tar.gz
+          tag_name: v${{ needs.build.outputs.vaultwarden_version }}-web-${{ needs.build.outputs.web_vault_version }}
+          release_name: "v${{ needs.build.outputs.vaultwarden_version }}-web-${{ needs.build.outputs.web_vault_version }}"
           body: |
             ### 构建信息
-            - Vaultwarden 版本: `${{ steps.get_version.outputs.vaultwarden_version }}`
-            - Web-Vault 版本: `${{ steps.get_version.outputs.web_vault_version }}`
-            
-            ### 包含的架构
-            - **x64 (64位)**: 适用于 64 位 Windows 系统
-            - **x86 (32位)**: 适用于 32 位 Windows 系统
-            
-            ### 功能特性
-            - 支持 SQLite、MySQL、PostgreSQL 数据库
-            - 静态链接运行时库
-            - 包含最新的 Web-Vault 界面
-            
-            ### 使用说明
-            1. 根据您的系统架构下载对应的压缩包
-            2. 解压到任意目录
-            3. 根据需要修改 `.env.template` 为 `.env` 并配置
-            4. 运行 `vaultwarden.exe`
+            - Vaultwarden 版本: `${{ needs.build.outputs.vaultwarden_version }}`
+            - Web-Vault 版本: `${{ needs.build.outputs.web_vault_version }}`
+            - 支持架构: x86, x64
