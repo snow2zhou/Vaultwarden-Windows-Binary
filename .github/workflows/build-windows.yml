@@ -239,18 +239,17 @@ jobs:
             -Z build-std=std,panic_abort `
             --target-dir "$targetDir"
             
-          # 验证构建是否成功 - 修正路径
-          $exePath = Join-Path $targetDir "${{ matrix.target-triple }}/release/vaultwarden.exe" # Corrected path relative to vaultwarden directory
-          if (Test-Path $exePath) {
-            Write-Host "✓ Build successful! Found at: $exePath"
-            Write-Host "File size: $((Get-Item $exePath).Length) bytes"
-            echo "exe_path=$exePath" >> $env:GITHUB_OUTPUT
+          # 动态查找生成的 vaultwarden.exe
+          $foundExe = Get-ChildItem -Path "target" -Recurse -Filter "vaultwarden.exe" -ErrorAction SilentlyContinue | Where-Object { $_.DirectoryName -like "*release" } | Sort-Object -Property FullName -Descending | Select-Object -First 1
+
+          if ($foundExe) {
+            $actualExePath = $foundExe.FullName
+            Write-Host "✓ Build successful! Found executable at: $actualExePath"
+            Write-Host "File size: $((Get-Item $actualExePath).Length) bytes"
+            # 将找到的实际路径输出为 GITHUB_OUTPUT
+            echo "exe_path=$actualExePath" >> $env:GITHUB_OUTPUT
           } else {
-            Write-Error "Build failed or executable not found"
-            Write-Host "Searching for executable..."
-            Get-ChildItem -Path "target" -Recurse -Filter "vaultwarden.exe" -ErrorAction SilentlyContinue | ForEach-Object {
-              Write-Host "Found: $($_.FullName)"
-            }
+            Write-Error "Build failed or vaultwarden.exe not found in target directory."
             exit 1
           }
         working-directory: vaultwarden
@@ -259,20 +258,26 @@ jobs:
         run: |
           $sourceExePath = "${{ steps.build.outputs.exe_path }}"
           $destinationExeName = "vaultwarden-${{ matrix.arch }}.exe"
-          $destinationPath = "./$destinationExeName" # Ensure it's in the root of the working directory
+          # 确保目标路径是相对于 vaultwarden 目录的根目录
+          $destinationPath = "./$destinationExeName" 
 
-          # Verify the executable exists before trying to move it
+          # 验证源可执行文件是否存在
           if (-not (Test-Path $sourceExePath)) {
-              Write-Error "Executable not found at: $sourceExePath"
-              Write-Host "Searching for alternative locations..."
-              # This search is relative to the current working directory (vaultwarden)
-              Get-ChildItem -Path "target" -Recurse -Filter "vaultwarden.exe" -ErrorAction SilentlyContinue | ForEach-Object {
-                Write-Host "Found: $($_.FullName)"
+              Write-Error "Executable not found at the path provided by the build step: $sourceExePath"
+              Write-Host "Attempting to find it manually in the 'target' directory..."
+              # 再次尝试搜索，以防万一
+              $fallbackExe = Get-ChildItem -Path "target" -Recurse -Filter "vaultwarden.exe" -ErrorAction SilentlyContinue | Where-Object { $_.DirectoryName -like "*release" } | Sort-Object -Property FullName -Descending | Select-Object -First 1
+              if ($fallbackExe) {
+                  Write-Host "Found fallback executable at: $($fallbackExe.FullName)"
+                  $sourceExePath = $fallbackExe.FullName # Update sourceExePath if found
+              } else {
+                  Write-Error "Fallback search failed. Could not locate vaultwarden.exe."
+                  exit 1
               }
-              exit 1
           }
           
-          # Move the executable to the root of the vaultwarden directory
+          # 移动可执行文件到 vaultwarden 目录的根目录
+          # 注意：这里是使用 PowerShell 的 Move-Item 命令，它会直接在当前工作目录下进行操作
           Move-Item -Path $sourceExePath -Destination $destinationPath -Force
           Write-Host "Moved '$sourceExePath' to '$destinationPath'"
         working-directory: vaultwarden
@@ -280,11 +285,22 @@ jobs:
       - name: Version detection
         id: version
         run: |
-          $vaultwardenExe = "./vaultwarden-${{ matrix.arch }}.exe" # This should now be in the root of the vaultwarden directory
+          # 尝试查找在 vaultwarden 目录下根目录的 vaultwarden 可执行文件
+          $vaultwardenExe = "./vaultwarden-${{ matrix.arch }}.exe" 
+          
           if (-not (Test-Path $vaultwardenExe)) {
-              Write-Error "Vaultwarden executable not found at $vaultwardenExe"
-              exit 1
+              Write-Error "Vaultwarden executable not found at expected location: $vaultwardenExe"
+              # 尝试在 vaultwarden 目录下搜索，以防万一
+              $fallbackExe = Get-ChildItem -Path "." -Filter "vaultwarden-*.exe" -ErrorAction SilentlyContinue | Sort-Object -Property FullName -Descending | Select-Object -First 1
+              if ($fallbackExe) {
+                  Write-Host "Found fallback executable at: $($fallbackExe.FullName)"
+                  $vaultwardenExe = $fallbackExe.FullName
+              } else {
+                  Write-Error "Fallback search failed. Could not locate vaultwarden executable in the vaultwarden directory."
+                  exit 1
+              }
           }
+
           $versionOutput = . $vaultwardenExe -v
           $versionMatch = $versionOutput | Select-String -Pattern "Vaultwarden (\d+\.\d+\.\d+)" -CaseSensitive
           if ($versionMatch) {
@@ -304,6 +320,7 @@ jobs:
                   exit 1
               }
           }
+        working-directory: vaultwarden
 
       - name: Package distribution
         run: |
