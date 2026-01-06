@@ -215,11 +215,11 @@ jobs:
 
       - name: List build output directories after build
         run: |
-          Write-Host "Listing contents of vaultwarden/target/ for target ${{ matrix.target-triple }}:"
-          Get-ChildItem -Path "vaultwarden/target/" -Recurse -ErrorAction SilentlyContinue | Select-Object FullName
+          Write-Host "Listing contents of target/ for target ${{ matrix.target-triple }}:"
+          Get-ChildItem -Path "target/" -Recurse -ErrorAction SilentlyContinue | Select-Object FullName
           Write-Host "----------------------------------------"
-          Write-Host "Listing contents of vaultwarden/target/nightly-${{ matrix.target-triple }}/release/:"
-          Get-ChildItem -Path "vaultwarden/target/nightly-${{ matrix.target-triple }}/release/" -ErrorAction SilentlyContinue
+          Write-Host "Listing contents of target/nightly-${{ matrix.target-triple }}/release/:"
+          Get-ChildItem -Path "target/nightly-${{ matrix.target-triple }}/release/" -ErrorAction SilentlyContinue
         working-directory: vaultwarden # Run from the vaultwarden directory
 
       - name: Move compiled artifact
