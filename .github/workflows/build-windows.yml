@@ -240,7 +240,7 @@ jobs:
             --target-dir "$targetDir"
             
           # 验证构建是否成功 - 修正路径
-          $exePath = "$targetDir/${{ matrix.target-triple }}/release/vaultwarden.exe"
+          $exePath = Join-Path $targetDir "${{ matrix.target-triple }}/release/vaultwarden.exe" # Corrected path relative to vaultwarden directory
           if (Test-Path $exePath) {
             Write-Host "✓ Build successful! Found at: $exePath"
             Write-Host "File size: $((Get-Item $exePath).Length) bytes"
@@ -259,25 +259,28 @@ jobs:
         run: |
           $sourceExePath = "${{ steps.build.outputs.exe_path }}"
           $destinationExeName = "vaultwarden-${{ matrix.arch }}.exe"
-          
+          $destinationPath = "./$destinationExeName" # Ensure it's in the root of the working directory
+
           # Verify the executable exists before trying to move it
           if (-not (Test-Path $sourceExePath)) {
               Write-Error "Executable not found at: $sourceExePath"
               Write-Host "Searching for alternative locations..."
+              # This search is relative to the current working directory (vaultwarden)
               Get-ChildItem -Path "target" -Recurse -Filter "vaultwarden.exe" -ErrorAction SilentlyContinue | ForEach-Object {
                 Write-Host "Found: $($_.FullName)"
               }
               exit 1
           }
           
-          Move-Item -Path $sourceExePath -Destination "./$destinationExeName" -Force
-          Write-Host "Moved to: $destinationExeName"
+          # Move the executable to the root of the vaultwarden directory
+          Move-Item -Path $sourceExePath -Destination $destinationPath -Force
+          Write-Host "Moved '$sourceExePath' to '$destinationPath'"
         working-directory: vaultwarden
 
       - name: Version detection
         id: version
         run: |
-          $vaultwardenExe = "./vaultwarden-${{ matrix.arch }}.exe"
+          $vaultwardenExe = "./vaultwarden-${{ matrix.arch }}.exe" # This should now be in the root of the vaultwarden directory
           if (-not (Test-Path $vaultwardenExe)) {
               Write-Error "Vaultwarden executable not found at $vaultwardenExe"
               exit 1
@@ -306,7 +309,7 @@ jobs:
         run: |
           $packageName = "vaultwarden-${{ matrix.arch }}-${{ steps.version.outputs.version }}.zip"
           $filesToPackage = @(
-              "./vaultwarden-${{ matrix.arch }}.exe",
+              "./vaultwarden-${{ matrix.arch }}.exe", # This is in the root of vaultwarden directory
               "./web-vault",
               "./.env.template"
           )
