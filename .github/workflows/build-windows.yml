@@ -36,19 +36,11 @@ jobs:
       contents: write
 
     steps:
-      - name: Check tool versions
-        run: |
-          git --version
-          cargo --version
-          vcpkg --version
-
-      - name: Install Rust targets
-        run: |
-          rustup target add ${{ matrix.target-triple }} --toolchain stable
-          rustup target add ${{ matrix.target-triple }} --toolchain nightly
-
-      - name: Add nightly rust-src component
-        run: rustup component add rust-src --toolchain nightly-x86_64-pc-windows-msvc
+      - name: Checkout Vaultwarden repository
+        uses: actions/checkout@v4
+        with:
+          repository: dani-garcia/vaultwarden
+          path: vaultwarden
 
       - name: Set up Rust toolchain (stable)
         uses: actions-rs/toolchain@v1
@@ -56,6 +48,7 @@ jobs:
           profile: minimal
           target: ${{ matrix.target-triple }}
           toolchain: stable
+          override: true # Ensure this toolchain is used for this job
 
       - name: Set up Rust toolchain (nightly)
         uses: actions-rs/toolchain@v1
@@ -63,16 +56,31 @@ jobs:
           profile: minimal
           target: ${{ matrix.target-triple }}
           toolchain: nightly
+          override: true # Ensure this toolchain is used for this job
+
+      - name: Install Rust targets and components
+        run: |
+          rustup target add ${{ matrix.target-triple }} --toolchain stable
+          rustup target add ${{ matrix.target-triple }} --toolchain nightly
+          rustup component add rust-src --toolchain nightly # Add rust-src for nightly
+
+      - name: Check tool versions
+        run: |
+          echo "Git version: $(git --version)"
+          echo "Cargo version: $(cargo --version)"
+          echo "Vcpkg version: $(vcpkg --version)"
 
       - name: Configure vcpkg
         run: |
           vcpkg integrate install
+          echo "Configuring vcpkg for triplet: ${{ matrix.vcpkg_arch }}"
           vcpkg install openssl:${{ matrix.vcpkg_arch }}
           vcpkg install libmariadb:${{ matrix.vcpkg_arch }}
           vcpkg install libpq:${{ matrix.vcpkg_arch }}
         env:
           VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
           VCPKG_DEFAULT_TRIPLET: ${{ matrix.vcpkg_arch }}
+        working-directory: vaultwarden # Ensure operations are within vaultwarden directory
 
       - name: Cache vcpkg
         uses: actions/cache@v4
@@ -81,6 +89,7 @@ jobs:
             %USERPROFILE%\vcpkg\installed
             %USERPROFILE%\vcpkg\buildtrees
           key: ${{ runner.os }}-vcpkg-${{ matrix.arch }}-${{ hashFiles('**/vcpkg.json') }}
+        working-directory: vaultwarden
 
       - name: Get version number
         id: get_tag
@@ -89,37 +98,44 @@ jobs:
           $selectedTagChoice = "${{ github.event.inputs.tag_choice }}"
 
           if ($selectedTagChoice -eq "release") {
-            $latestRelease = Invoke-RestMethod -Uri "https://api.github.com/repos/dani-garcia/vaultwarden/releases/latest"
+            Write-Host "Fetching latest release tag for Vaultwarden..."
+            $latestRelease = Invoke-RestMethod -Uri "https://api.github.com/repos/dani-garcia/vaultwarden/releases/latest" -ErrorAction Stop
             $vaultwardenTag = $latestRelease.tag_name
             Write-Host "Latest release tag: $vaultwardenTag"
           } elseif ($selectedTagChoice -eq "custom") {
             $vaultwardenTag = "${{ github.event.inputs.tag }}"
-            Write-Host "Custom tag: $vaultwardenTag"
+            Write-Host "Custom tag provided: $vaultwardenTag"
+            if (-not $vaultwardenTag) {
+                Write-Error "Custom tag is required when tag_choice is 'custom'."
+                exit 1
+            }
           } elseif ($selectedTagChoice -eq "latest") {
             Write-Host "Using 'latest' tag choice, will checkout latest commit."
+            # For 'latest', we'll checkout the default branch later if no specific tag is found.
+            # We don't need to set vaultwardenTag here as checkout will use default if ref is empty.
           } else {
             Write-Host "Unknown tag_choice: '$selectedTagChoice', defaulting to main branch."
           }
 
           echo "vaultwarden_tag=$vaultwardenTag" >> $env:GITHUB_OUTPUT
           echo "tag_choice=$selectedTagChoice" >> $env:GITHUB_OUTPUT
+        working-directory: vaultwarden
 
-      - name: Checkout repository
+      - name: Checkout specific Vaultwarden commit/tag
+        if: ${{ steps.get_tag.outputs.vaultwarden_tag != '' || steps.get_tag.outputs.tag_choice == 'latest' }}
         uses: actions/checkout@v4
         with:
           repository: dani-garcia/vaultwarden
+          # If vaultwarden_tag is empty (e.g., for 'latest' or if fetch failed), checkout will use default branch (main)
           ref: ${{ steps.get_tag.outputs.vaultwarden_tag }}
-          path: vaultwarden
-
-      - name: Switch version (if 'release' or 'custom' chosen)
-        if: ${{ steps.get_tag.outputs.vaultwarden_tag != '' && steps.get_tag.outputs.tag_choice != 'latest' }}
-        run: git checkout ${{ steps.get_tag.outputs.vaultwarden_tag }}
-        working-directory: vaultwarden
+          path: vaultwarden # This path is relative to the runner's workspace, so it will be D:\a\Vaultwarden-Windows-Binary\Vaultwarden-Windows-Binary\vaultwarden
 
       - name: Download web-vault
         run: |
           [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-          $release = Invoke-RestMethod -Uri "https://api.github.com/repos/dani-garcia/bw_web_builds/releases/latest"
+          Write-Host "Fetching latest web-vault release..."
+          $release = Invoke-RestMethod -Uri "https://api.github.com/repos/dani-garcia/bw_web_builds/releases/latest" -ErrorAction Stop
+          
           $asset = $release.assets | Where-Object {
               ($_.name -match "^web-vault-v\d+\.\d+\.\d+\.tar\.gz$") -or
               ($_.name -like "web-vault-*.tar.gz") -or
@@ -137,37 +153,49 @@ jobs:
           $outPath = "web-vault"
 
           Write-Host "Downloading $fileName from $downloadUrl..."
-          Invoke-WebRequest -Uri $downloadUrl -OutFile $fileName
+          Invoke-WebRequest -Uri $downloadUrl -OutFile $fileName -UseBasicParsing
 
           Write-Host "Extracting $fileName to $outPath..."
           if (-not (Test-Path -Path $outPath)) {
             New-Item -ItemType Directory -Path $outPath -Force
           }
+          # Ensure tar is available or use a PowerShell alternative if necessary
+          # For Windows, tar is usually available with Git Bash or as part of Windows itself
           tar -xf $fileName -C $outPath --strip-components=1
+          
+          if (Test-Path "$outPath\index.html") {
+              Write-Host "✓ Successfully downloaded and extracted web-vault."
+          } else {
+              Write-Error "❌ web-vault extraction failed or index.html not found in $outPath."
+              exit 1
+          }
         working-directory: vaultwarden
 
       - name: Download .env.template
         run: |
           $tag = "${{ steps.get_tag.outputs.vaultwarden_tag }}"
+          # If tag is empty (e.g., 'latest' chosen or fetch failed), try main branch
           if (-not $tag) {
             $tag = "main"
+            Write-Host "Vaultwarden tag not determined, using 'main' branch for .env.template."
           }
           $url = "https://raw.githubusercontent.com/dani-garcia/vaultwarden/$tag/.env.template"
           
           try {
+            Write-Host "Attempting to download .env.template from branch: $tag"
             Invoke-WebRequest -Uri $url -OutFile .env.template -ErrorAction Stop
-            Write-Host "✓ Successfully downloaded .env.template"
+            Write-Host "✓ Successfully downloaded .env.template from $tag."
           } catch {
-             Write-Warning "Failed to download from $tag, trying main branch..."
+             Write-Warning "Failed to download from $tag, trying main branch as fallback..."
              $fallbackUrl = "https://raw.githubusercontent.com/dani-garcia/vaultwarden/main/.env.template"
              Invoke-WebRequest -Uri $fallbackUrl -OutFile .env.template
-             Write-Host "✓ Downloaded .env.template from main branch (fallback)"
+             Write-Host "✓ Downloaded .env.template from main branch (fallback)."
           }
           if (Test-Path .env.template) {
             $fileSize = (Get-Item .env.template).Length
             Write-Host "File downloaded successfully. Size: $fileSize bytes"
           } else {
-            Write-Error "Failed to download .env.template"
+            Write-Error "Failed to download .env.template even with fallback."
             exit 1
           }
         working-directory: vaultwarden
@@ -176,81 +204,123 @@ jobs:
         id: get_mariadb_version
         run: |
           $vcpkgInstalledPath = "$env:USERPROFILE\vcpkg\installed"
+          # Construct path using the matrix's vcpkg_arch
           $mariadbPath = Join-Path $vcpkgInstalledPath "${{ matrix.vcpkg_arch }}"
           $includeDir = Join-Path $mariadbPath "include\mysql\mariadb"
           $version = ""
           
+          Write-Host "Searching for MariaDB version in: $includeDir"
           if (Test-Path $includeDir) {
             $headerFiles = Get-ChildItem -Path $includeDir -Filter "*mysql.h"
             foreach ($file in $headerFiles) {
               $content = Get-Content $file.FullName
+              
+              # Try to find MARIADB_VERSION first
               $versionMatch = $content | Select-String -Pattern 'MARIADB_VERSION\s+"(\d+\.\d+(\.\d+)?)"'
               if ($versionMatch) {
                 $version = $versionMatch.Matches.Groups[1].Value
+                Write-Host "Found MARIADB_VERSION: $version"
                 break
               }
 
+              # Fallback to LIBMYSQL_VERSION if MARIADB_VERSION is not found
               $versionMatch = $content | Select-String -Pattern 'LIBMYSQL_VERSION\s+"(\d+\.\d+(\.\d+)?)"'
               if ($versionMatch) {
                 $version = $versionMatch.Matches.Groups[1].Value
+                Write-Host "Found LIBMYSQL_VERSION: $version"
                 break
               }
             }
+          } else {
+            Write-Warning "MariaDB include directory not found: $includeDir. Cannot auto-detect version."
           }
 
           if (-not $version) {
-            Write-Warning "Could not automatically detect MariaDB version from include files. Setting to '3.1.11'."
-            $version = "3.1.11"
+            Write-Warning "Could not automatically detect MariaDB version from include files. Using default '3.1.11'."
+            $version = "3.1.11" # Default to a common recent version
           }
 
-          if (-not $version) {
-            Write-Error "❌ Failed to detect MariaDB version. Please manually set MYSQLCLIENT_VERSION or ensure MariaDB is installed correctly by vcpkg."
-            exit 1
-          }
-
-          Write-Host "Detected MariaDB version: $version"
+          Write-Host "Final MariaDB version to use: $version"
           echo "mariadb_version=$version" >> $env:GITHUB_OUTPUT
+        working-directory: vaultwarden
 
       - name: Build project (using nightly)
         run: |
-          $targetDir = "target/nightly-${{ matrix.target-triple }}"
+          $targetTriple = "${{ matrix.target-triple }}"
+          $targetDir = "target/nightly-$targetTriple" # Dynamically set target directory
+
+          # Set RUSTFLAGS for static linking with LLD
           $env:RUSTFLAGS = "-C target-feature=+crt-static -Clinker=lld-link"
-
-          $vcpkgInstalledPath = "$env:USERPROFILE\vcpkg\installed"
-          $env:POSTGRESQL_LIB_DIR = Join-Path $vcpkgInstalledPath "${{ matrix.vcpkg_arch }}\lib"
-          $env:MYSQLCLIENT_LIB_DIR = Join-Path $vcpkgInstalledPath "${{ matrix.vcpkg_arch }}\lib"
-          $env:MYSQLCLIENT_INCLUDE_DIR = Join-Path $vcpkgInstalledPath "${{ matrix.vcpkg_arch }}\include\mysql\mariadb"
-
-          if (-not (Test-Path $env:POSTGRESQL_LIB_DIR)) { Write-Warning "PostgreSQL lib dir not found: $env:POSTGRESQL_LIB_DIR" }
-          if (-not (Test-Path $env:MYSQLCLIENT_LIB_DIR)) { Write-Warning "MySQLClient lib dir not found: $env:MYSQLCLIENT_LIB_DIR" }
-          if (-not (Test-Path $env:MYSQLCLIENT_INCLUDE_DIR)) { Write-Warning "MySQLClient include dir not found: $env:MYSQLCLIENT_INCLUDE_DIR" }
           
-          $env:MYSQLCLIENT_VERSION = "${{ steps.get_mariadb_version.outputs.mariadb_version }}"
-          $env:CARGO_HTTP_RETRY = "5"
+          # Set VCPKG environment variables for linker to find libraries
+          $vcpkgInstalledPath = "$env:USERPROFILE\vcpkg\installed"
+          
+          # Check if directories exist and provide warnings if not
+          $env:POSTGRESQL_LIB_DIR = Join-Path $vcpkgInstalledPath "${{ matrix.vcpkg_arch }}\lib"
+          if (-not (Test-Path $env:POSTGRESQL_LIB_DIR)) { Write-Warning "PostgreSQL lib dir not found: $env:POSTGRESQL_LIB_DIR. PostgreSQL feature might fail." }
+          
+          $env:MYSQLCLIENT_LIB_DIR = Join-Path $vcpkgInstalledPath "${{ matrix.vcpkg_arch }}\lib"
+          if (-not (Test-Path $env:MYSQLCLIENT_LIB_DIR)) { Write-Warning "MySQLClient lib dir not found: $env:MYSQLCLIENT_LIB_DIR. MySQL feature might fail." }
 
+          $env:MYSQLCLIENT_INCLUDE_DIR = Join-Path $vcpkgInstalledPath "${{ matrix.vcpkg_arch }}\include\mysql\mariadb"
+          if (-not (Test-Path $env:MYSQLCLIENT_INCLUDE_DIR)) { Write-Warning "MySQLClient include dir not found: $env:MYSQLCLIENT_INCLUDE_DIR. MySQL feature might fail." }
+          
+          # Set the detected MariaDB version
+          $env:MYSQLCLIENT_VERSION = "${{ steps.get_mariadb_version.outputs.mariadb_version }}"
+          $env:CARGO_HTTP_RETRY = "5" # Increase retry attempts for network operations
+
+          Write-Host "Starting Cargo build for target: $targetTriple"
+          Write-Host "Target directory: $targetDir"
+          Write-Host "RUSTFLAGS: $env:RUSTFLAGS"
+          Write-Host "MYSQLCLIENT_VERSION: $env:MYSQLCLIENT_VERSION"
+          
+          # Use a temporary file to capture cargo output for better debugging
+          $cargoOutputLog = "$targetDir/cargo_build.log"
+          New-Item -ItemType File -Path $cargoOutputLog -Force
+
+          # Execute cargo build and capture output
+          # -Z build-std=std,panic_abort is for building stdlib from source, which might be needed for some targets/configurations
           cargo +nightly build `
             --features "sqlite,mysql,postgresql" `
             --release `
-            --target ${{ matrix.target-triple }} `
+            --target $targetTriple `
             -Z build-std=std,panic_abort `
-            --target-dir "$targetDir"
+            --target-dir $targetDir `
+            | Tee-Object -FilePath $cargoOutputLog -Append # Capture stdout to log file
+
+          # Check the exit code of the cargo command
+          if ($LASTEXITCODE -ne 0) {
+              Write-Error "Cargo build failed with exit code $LASTEXITCODE."
+              Write-Host "--- Cargo Build Log ---"
+              Get-Content $cargoOutputLog
+              Write-Host "-----------------------"
+              exit 1 # Exit with error code
+          }
             
+          Write-Host "Cargo build command finished successfully."
         working-directory: vaultwarden
 
       - name: Debug build output
         run: |
           Write-Host "Current directory: $(Get-Location)"
-          Write-Host "Looking for built executable..."
+          Write-Host "Looking for built executable in target directory: target/nightly-${{ matrix.target-triple }}/release/"
         
-          # 检查构建是否成功
+          # Construct the expected executable path
           $exePath = "target/nightly-${{ matrix.target-triple }}/release/vaultwarden.exe"
+          
           if (Test-Path $exePath) {
             Write-Host "✓ Build successful! Found at: $exePath"
             Write-Host "File size: $((Get-Item $exePath).Length) bytes"
           } else {
-            Write-Error "Build failed or executable not found"
-            Write-Host "Contents of target directory:"
-            Get-ChildItem -Path "target" -Recurse -ErrorAction SilentlyContinue | Select-Object FullName
+            Write-Error "Build failed or executable not found at expected path: $exePath"
+            Write-Host "Listing contents of target directory for debugging:"
+            # List contents of the main target directory
+            if (Test-Path "target") {
+              Get-ChildItem -Path "target" -Recurse -ErrorAction SilentlyContinue | Select-Object FullName
+            } else {
+              Write-Host " 'target' directory does not exist."
+            }
+            exit 1 # Exit with error code if executable is not found
           }
         working-directory: vaultwarden
 
@@ -261,47 +331,71 @@ jobs:
           
           # Verify the executable exists before trying to move it
           if (-not (Test-Path $sourceExePath)) {
-              Write-Error "Executable not found at: $sourceExePath"
+              Write-Error "Executable not found at: $sourceExePath. Cannot proceed with packaging."
               exit 1 # Exit with error if not found
           }
           
           Move-Item -Path $sourceExePath -Destination "./$destinationExeName"
-          Write-Host "Moved to: $destinationExeName"
-        working-directory: vaultwarden # Ensure we are in the vaultwarden dir to move from its target subdir
+          Write-Host "Successfully moved '$sourceExePath' to './$destinationExeName'."
+        working-directory: vaultwarden
 
       - name: Version detection
         id: version
         run: |
           $vaultwardenExe = "./vaultwarden-${{ matrix.arch }}.exe"
           if (-not (Test-Path $vaultwardenExe)) {
-              Write-Error "Vaultwarden executable not found at $vaultwardenExe"
+              Write-Error "Vaultwarden executable not found at $vaultwardenExe for version detection."
               exit 1
           }
-          $versionOutput = . $vaultwardenExe -v
+          Write-Host "Detecting version from '$vaultwardenExe -v'..."
+          # Capture the output of the version command
+          $versionOutput = & $vaultwardenExe -v
+          
+          if ($LASTEXITCODE -ne 0) {
+              Write-Error "Failed to execute '$vaultwardenExe -v'. Exit code: $LASTEXITCODE."
+              Write-Host "Output: $($versionOutput -join "`n")"
+              exit 1
+          }
+
           $versionMatch = $versionOutput | Select-String -Pattern "Vaultwarden (\d+\.\d+\.\d+)"
           if ($versionMatch) {
               $version = $versionMatch.Matches.Groups[1].Value
               Write-Host "Detected Vaultwarden version: $version"
               echo "version=$version" >> $env:GITHUB_OUTPUT
           } else {
-              Write-Error "Could not detect Vaultwarden version from '$($vaultwardenExe -v)'"
+              Write-Error "Could not detect Vaultwarden version from output: $($versionOutput -join "`n")"
               exit 1
           }
+        working-directory: vaultwarden
 
       - name: Package distribution
         run: |
-          $packageName = "vaultwarden-${{ matrix.arch }}-${{ steps.version.outputs.version }}.zip"
+          $buildVersion = "${{ steps.version.outputs.version }}"
+          if (-not $buildVersion) {
+              Write-Error "Vaultwarden version not detected, cannot package."
+              exit 1
+          }
+          $packageName = "vaultwarden-${{ matrix.arch }}-${buildVersion}.zip"
+          
+          # Ensure all files exist before packaging
           $filesToPackage = @(
               "./vaultwarden-${{ matrix.arch }}.exe",
               "./web-vault",
               "./.env.template"
           )
+          
           foreach ($file in $filesToPackage) {
               if (-not (Test-Path $file)) {
-                  Write-Warning "File/Directory not found for packaging: $file"
+                  Write-Error "Required file/directory for packaging not found: '$file'. Cannot create distribution."
+                  exit 1
               }
+              Write-Host "Found file for packaging: '$file'"
           }
+          
+          Write-Host "Creating distribution zip: '$packageName'"
           Compress-Archive -Path $filesToPackage -DestinationPath $packageName -Force
+          Write-Host "Successfully created '$packageName'."
+        working-directory: vaultwarden
 
       - name: Create Release (only if tag_choice is not 'latest')
         if: ${{ github.event.inputs.tag_choice != 'latest' }}
@@ -309,5 +403,8 @@ jobs:
         with:
           files: |
             vaultwarden-*-${{ steps.version.outputs.version }}.zip
-          tag_name: v${{ steps.version.outputs.version }}
+          # The tag_name should be created based on the detected version.
+          # If get_tag.outputs.vaultwarden_tag is like "v1.2.3", we use that.
+          # Otherwise, we use the detected version directly.
+          tag_name: ${{ steps.get_tag.outputs.vaultwarden_tag != '' && steps.get_tag.outputs.vaultwarden_tag || format('v{0}', steps.version.outputs.version) }}
           name: "Vaultwarden ${{ steps.version.outputs.version }} (Windows Builds)"
