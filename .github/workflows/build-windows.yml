@@ -32,6 +32,12 @@ jobs:
             rust_target: i686-pc-windows-msvc
 
     steps:
+      - name: 安装 Rust 工具链
+        run: |
+          rustup toolchain install stable-${{ matrix.rust_target }}
+          rustup default stable-${{ matrix.rust_target }}
+          rustup target add ${{ matrix.rust_target }}
+          
       - name: 检查工具版本
         run: git version && cargo version && vcpkg version
 
@@ -96,6 +102,7 @@ jobs:
           vcpkg install libpq:${{ matrix.vcpkg_triplet }}
         env:
           VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
+          VCPKG_FORCE_SYSTEM_BINARIES: 1
           
       - name: 缓存vcpkg依赖
         uses: actions/cache@v4
@@ -107,7 +114,9 @@ jobs:
         run: cargo build --features "sqlite,mysql,postgresql" --release --target ${{ matrix.rust_target }}
         working-directory: vaultwarden
         env:
-          RUSTFLAGS: "-Ctarget-feature=+crt-static"
+          RUSTFLAGS: "-Ctarget-feature=+crt-static -C linker=rust-lld.exe"
+          CARGO_TARGET_I686_PC_WINDOWS_MSVC_LINKER: "lld-link"
+          CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER: "lld-link"
           POSTGRESQL_LIB_DIR: "${{ github.workspace }}/vcpkg/installed/${{ matrix.vcpkg_triplet }}/lib"
           MYSQLCLIENT_VERSION: "3.1.0"
           MYSQLCLIENT_LIB_DIR: "${{ github.workspace }}/vcpkg/installed/${{ matrix.vcpkg_triplet }}/lib"
