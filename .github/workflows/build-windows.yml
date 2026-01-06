@@ -101,8 +101,11 @@ jobs:
             Write-Host "Unknown tag_choice: '$selectedTagChoice', defaulting to main branch."
           }
 
-          echo "vaultwarden_tag=$vaultwardenTag" >> $env:GITHUB_OUTPUT
-          echo "tag_choice=$selectedTagChoice" >> $env:GITHUB_OUTPUT
+          # echo "vaultwarden_tag=$vaultwardenTag" >> $env:GITHUB_OUTPUT
+          # echo "tag_choice=$selectedTagChoice" >> $env:GITHUB_OUTPUT
+
+          "vaultwarden_tag=$vaultwardenTag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "tag_choice=$selectedTagChoice" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -209,7 +212,8 @@ jobs:
           }
 
           Write-Host "Detected MariaDB version: $version"
-          echo "mariadb_version=$version" >> $env:GITHUB_OUTPUT
+          # echo "mariadb_version=$version" >> $env:GITHUB_OUTPUT
+          "mariadb_version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
       - name: Build project (using nightly)
         id: build
@@ -247,7 +251,8 @@ jobs:
             Write-Host "✓ Build successful! Found executable at: $actualExePath"
             Write-Host "File size: $((Get-Item $actualExePath).Length) bytes"
             # 将找到的实际路径输出为 GITHUB_OUTPUT
-            echo "exe_path=$actualExePath" >> $env:GITHUB_OUTPUT
+            # echo "exe_path=$actualExePath" >> $env:GITHUB_OUTPUT
+            "exe_path=$actualExePath" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           } else {
             Write-Error "Build failed or vaultwarden.exe not found in target directory."
             exit 1
@@ -306,14 +311,16 @@ jobs:
           if ($versionMatch) {
               $version = $versionMatch.Matches.Groups[1].Value
               Write-Host "Detected Vaultwarden version: $version"
-              echo "version=$version" >> $env:GITHUB_OUTPUT
+              # echo "version=$version" >> $env:GITHUB_OUTPUT
+              "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           } else {
               # 尝试其他可能的版本格式
               $versionMatch = $versionOutput | Select-String -Pattern "(\d+\.\d+\.\d+)" -CaseSensitive
               if ($versionMatch) {
                   $version = $versionMatch.Matches.Groups[1].Value
                   Write-Host "Detected version (alternative pattern): $version"
-                  echo "version=$version" >> $env:GITHUB_OUTPUT
+                  # echo "version=$version" >> $env:GITHUB_OUTPUT
+                  "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
               } else {
                   Write-Host "Version output: $versionOutput"
                   Write-Error "Could not detect Vaultwarden version"
